@@ -13,18 +13,4 @@
 - GitHub Actions сохраняет результат запуска как artifact.
 - Публикация в Дзен намеренно остаётся отдельным официальным шагом: скрытые/неподтверждённые endpoint'ы не используются.
 
-## Быстрый старт
-1. Создай GitHub repository. Для бесплатного Actions используй **public repository**.
-2. Загрузи проект целиком.
-3. В Cloudflare создай D1 `dzen-auto`.
-4. Создай Worker из `cloud/`, привяжи D1 и secrets.
-5. В GitHub → Settings → Secrets and variables → Actions добавь:
-   - OPENROUTER_API_KEY
-   - TELEGRAM_BOT_TOKEN
-   - TELEGRAM_CHAT_ID
-   - CLOUDFLARE_API_TOKEN
-   - CLOUDFLARE_ACCOUNT_ID
-   - CLOUDFLARE_D1_DATABASE_ID
-6. Запусти workflow вручную для теста.
 
-Подробная инструкция: `cloud/README.md`.
