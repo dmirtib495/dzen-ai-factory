@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from config import (
     CHANNEL_NAME,
+    DEEPSEEK_MODEL,
     MAX_ARTICLE_WORDS,
     MIN_ARTICLE_WORDS,
     OPENAI_API_KEY,
@@ -100,6 +101,17 @@ def _normalize(data: Any, provider: str, model: str) -> dict:
     }
 
 
+def _merge_editor(original: dict, edited: dict, provider: str, model: str) -> dict:
+    merged = dict(original)
+    for key in ("headline", "headlines", "category", "article_markdown", "fact_check", "image_prompt", "source_urls", "commercial_intent"):
+        value = edited.get(key)
+        if value not in (None, "", []):
+            merged[key] = value
+    normalized = _normalize(merged, provider, model)
+    normalized["ai_stages"] = original.get("ai_stages", []) + [f"{provider}:{model}"]
+    return normalized
+
+
 def _article_prompt(topic: dict) -> str:
     return f'''Источник темы: {_as_text(topic.get('source'))}
 Заголовок исходной темы: {_as_text(topic.get('title'))}
@@ -118,7 +130,7 @@ def _openrouter_draft(topic: dict) -> dict:
         raise RuntimeError(f"Дневной лимит OpenRouter исчерпан ({OPENROUTER_DAILY_LIMIT})")
     client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1", timeout=120, max_retries=1)
     models = []
-    for model in (OPENROUTER_MODEL, "openrouter/free"):
+    for model in (DEEPSEEK_MODEL, OPENROUTER_MODEL, "openrouter/free"):
         if model and model not in models:
             models.append(model)
     errors = []
@@ -130,7 +142,8 @@ def _openrouter_draft(topic: dict) -> dict:
                 temperature=0.5,
             )
             data = _extract(response.choices[0].message.content or "")
-            return _normalize(data, "OpenRouter", model)
+            provider = "DeepSeek/OpenRouter" if model == DEEPSEEK_MODEL else "OpenRouter"
+            return _normalize(data, provider, model)
         except Exception as exc:
             errors.append(f"{model}: {exc}")
     raise RuntimeError("OpenRouter недоступен: " + " | ".join(errors))
@@ -139,7 +152,7 @@ def _openrouter_draft(topic: dict) -> dict:
 def _editor_prompt(data: dict, editor_name: str) -> str:
     payload = json.dumps(data, ensure_ascii=False)
     return f'''Ты {editor_name} автомобильного медиа. Проверь русский язык, логику, полезность, отсутствие выдуманных фактов и рекламных обещаний.
-Не добавляй новые неподтвержденные факты. Сохрани источники. Улучши материал только если это действительно нужно.
+Не добавляй новые неподтвержденные факты. Сохрани источники, fact_check и image_prompt. Улучши материал только если это действительно нужно.
 Верни ТОЛЬКО JSON с теми же полями: headline, headlines, category, article_markdown, fact_check, image_prompt, source_urls, commercial_intent.
 Материал: {payload}'''
 
@@ -156,9 +169,10 @@ def _yandex_edit(data: dict) -> dict:
     response = requests.post(url, headers={"Authorization": f"Api-Key {YANDEX_API_KEY}", "Content-Type": "application/json"}, json=body, timeout=120)
     response.raise_for_status()
     raw = response.json()["result"]["alternatives"][0]["message"]["text"]
-    edited = _normalize(_extract(raw), "Yandex AI", YANDEX_MODEL)
-    edited["ai_stages"] = data.get("ai_stages", []) + [f"Yandex AI:{YANDEX_MODEL}"]
-    return edited
+    parsed = _extract(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("Yandex AI вернул некорректный JSON")
+    return _merge_editor(data, parsed, "Yandex AI", YANDEX_MODEL)
 
 
 def _openai_edit(data: dict) -> dict:
@@ -169,9 +183,10 @@ def _openai_edit(data: dict) -> dict:
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": _editor_prompt(data, "финальный редактор OpenAI")}],
     )
-    edited = _normalize(_extract(response.choices[0].message.content or ""), "OpenAI", OPENAI_MODEL)
-    edited["ai_stages"] = data.get("ai_stages", []) + [f"OpenAI:{OPENAI_MODEL}"]
-    return edited
+    parsed = _extract(response.choices[0].message.content or "")
+    if not isinstance(parsed, dict):
+        raise ValueError("OpenAI вернул некорректный JSON")
+    return _merge_editor(data, parsed, "OpenAI", OPENAI_MODEL)
 
 
 def generate_article(topic):
