@@ -31,41 +31,60 @@ jobs:
         run: python -m compileall -q .
       - name: Validate configuration
         run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
-      - name: Validate AI prompt contracts
+      - name: Validate professional prompt contracts
         run: |
           python - <<'PY'
-          from ai_writer import BASE_SYSTEM, _article_prompt, _yandex_prompt, _final_prompt
+          from editorial_prompts import (
+              EDITORIAL_SYSTEM, draft_prompt, yandex_editor_prompt,
+              final_editor_prompt, quality_auditor_prompt, repair_prompt,
+          )
           topic = {
               'source': 'CI source',
               'title': 'Как выбрать подержанный автомобиль без лишних расходов',
               'link': 'https://example.com/article',
               'summary': 'Краткое описание темы для теста.',
           }
-          draft = _article_prompt(topic)
-          yandex = _yandex_prompt({
+          material = {
               'headline': topic['title'],
               'headlines': [topic['title']] * 5,
               'category': 'Экономия',
               'article_markdown': '## Тест\nТекст',
-              'fact_check': ['Проверить: тест'],
-              'image_prompt': 'realistic editorial automotive photo',
+              'fact_check': ['Проверить: тест'] * 3,
+              'image_prompt': 'realistic editorial automotive photo in natural light',
               'source_urls': [topic['link']],
               'commercial_intent': 5,
-          })
-          final = _final_prompt({
-              'headline': topic['title'],
-              'headlines': [topic['title']] * 5,
-              'category': 'Экономия',
-              'article_markdown': '## Тест\nТекст',
-              'fact_check': ['Проверить: тест'],
-              'image_prompt': 'realistic editorial automotive photo',
-              'source_urls': [topic['link']],
-              'commercial_intent': 5,
-          })
-          assert 'не выдумывай' in BASE_SYSTEM.lower()
-          assert 'https://example.com/article' in draft
+          }
+          draft = draft_prompt(topic, [topic['link']])
+          yandex = yandex_editor_prompt(material)
+          final = final_editor_prompt(material)
+          audit = quality_auditor_prompt(material)
+          repair = repair_prompt(material, ['Мало слов'], {'verdict':'REVISE','blocking_issues':['Мало слов']}, 1)
+
+          assert 'доказательность' in EDITORIAL_SYSTEM.lower()
+          assert 'не выдумывай' in EDITORIAL_SYSTEM.lower()
+          assert '1080' in draft or '1050' in draft
           assert '5–8' in draft and 'чек-лист' in draft
-          assert 'YandexGPT' in yandex and '1000–1300' in yandex
-          assert '12 критериев' in final and '1000–1300' in final
-          print('AI prompt contracts: OK')
+          assert 'YandexGPT' not in yandex or 'выпускающий редактор' in yandex
+          assert '12 КРИТЕРИЕВ' in final
+          assert 'независимый руководитель контроля качества' in audit
+          assert 'PASS' in audit and 'blocking_issues' in audit and '>= 90' in audit
+          assert 'senior rewrite editor' in repair.lower()
+          print('Professional prompt contracts: OK')
+          PY
+      - name: Validate deterministic quality gate
+        run: |
+          python - <<'PY'
+          from quality_checker import check_article
+          bad = {
+              'headline': 'Шок! Лучшая машина 100% без проблем',
+              'article_markdown': '## Раздел\nВсегда покупайте именно так.',
+              'fact_check': [],
+              'source_urls': [],
+              'image_prompt': '',
+          }
+          result = check_article(bad, require_ai_audit=True)
+          assert not result['ok']
+          assert result['score'] < 90
+          assert len(result['problems']) >= 5
+          print('Deterministic quality gate: OK')
           PY
