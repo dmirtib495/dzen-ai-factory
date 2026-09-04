@@ -3,7 +3,7 @@ type Env = {
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
   CONTROL_SECRET: string;
-  GITHUB_TRIGGER_TOKEN: string;
+  WORKFLOW_TRIGGER_TOKEN: string;
 };
 
 type TgUpdate = any;
@@ -249,8 +249,8 @@ async function statusText(env: Env) {
 }
 
 async function triggerGeneration(env: Env) {
-  if (!env.GITHUB_TRIGGER_TOKEN) {
-    return { ok: false, status: 0, message: "GITHUB_TRIGGER_TOKEN не настроен" };
+  if (!env.WORKFLOW_TRIGGER_TOKEN) {
+    return { ok: false, status: 0, message: "WORKFLOW_TRIGGER_TOKEN не настроен" };
   }
 
   const r = await fetch(
@@ -258,7 +258,7 @@ async function triggerGeneration(env: Env) {
     {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.GITHUB_TRIGGER_TOKEN}`,
+        "Authorization": `Bearer ${env.WORKFLOW_TRIGGER_TOKEN}`,
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "dzen-auto-control-worker",
@@ -321,7 +321,7 @@ async function handleCallback(
     return send(
       env,
       chat,
-      `❌ Не удалось запустить генерацию. Код GitHub API: ${result.status || "—"}. Проверь GITHUB_TRIGGER_TOKEN в Worker.`,
+      `❌ Не удалось запустить генерацию. Код GitHub API: ${result.status || "—"}. Проверь WORKFLOW_TRIGGER_TOKEN в Worker.`,
       mainMenu()
     );
   }
@@ -442,7 +442,7 @@ export default {
         telegram_token_configured: Boolean(env.TELEGRAM_BOT_TOKEN),
         telegram_chat_configured: Boolean(env.TELEGRAM_CHAT_ID),
         control_secret_configured: Boolean(env.CONTROL_SECRET),
-        github_trigger_configured: Boolean(env.GITHUB_TRIGGER_TOKEN),
+        workflow_trigger_configured: Boolean(env.WORKFLOW_TRIGGER_TOKEN),
         d1_configured: Boolean(env.DB),
       });
     }
