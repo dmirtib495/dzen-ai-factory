@@ -1,4 +1,4 @@
-# production E2E trigger: 2026-09-05-v3-strict-quality
+# production E2E trigger: 2026-09-05-v4-five-yandex-reviewed
 name: Dzen Production E2E Now
 
 on:
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -47,8 +47,9 @@ jobs:
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
             echo "OPENROUTER_MODEL=openrouter/free"
             echo "DEEPSEEK_MODEL=deepseek/deepseek-chat-v3.1:free"
+            echo "OPENROUTER_EDITOR_MODEL=openai/gpt-oss-120b:free"
             echo "OPENAI_API_KEY=$OPENAI_API_KEY"
-            echo "OPENAI_MODEL=openai/gpt-oss-120b:free"
+            echo "OPENAI_MODEL=gpt-5-mini"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
             echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
             echo "YANDEX_MODEL=yandexgpt/latest"
@@ -57,22 +58,30 @@ jobs:
             echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
             echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
             echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
-            echo "ARTICLES_PER_DAY=1"
+            echo "ARTICLES_PER_DAY=5"
             echo "OPENROUTER_DAILY_LIMIT=50"
             echo "MIN_ARTICLE_WORDS=900"
             echo "MAX_ARTICLE_WORDS=1400"
             echo "TIMEZONE=Europe/Moscow"
             echo "SCHEDULE_HOURS=6,12,18"
           } > .env
+      - name: Require Yandex AI credentials
+        run: |
+          python - <<'PY'
+          import os
+          assert os.getenv('YANDEX_API_KEY','').strip(), 'YANDEX_API_KEY secret is missing'
+          assert os.getenv('YANDEX_FOLDER_ID','').strip(), 'YANDEX_FOLDER_ID secret is missing'
+          print('Yandex AI credentials: present')
+          PY
       - name: Validate configuration
         run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
       - name: Initialize D1
         run: python cloud/init_d1.py
       - name: Sync before generation
         run: python cloud_sync.py
-      - name: Generate production article
+      - name: Generate five production articles
         run: |
-          python -c "from pipeline import generate_batch; n=generate_batch(); print('publication_grade_articles=', n); raise SystemExit(0 if n >= 1 else 2)"
+          python -c "from pipeline import generate_batch; n=generate_batch(); print('publication_grade_articles=', n); raise SystemExit(0 if n == 5 else 2)"
       - name: Sync after generation
         if: always()
         run: python cloud_sync.py
