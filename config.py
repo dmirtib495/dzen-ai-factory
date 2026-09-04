@@ -10,6 +10,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '').strip()
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'openrouter/free').strip()
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '').strip()
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5-mini').strip()
+YANDEX_API_KEY = os.getenv('YANDEX_API_KEY', '').strip()
+YANDEX_FOLDER_ID = os.getenv('YANDEX_FOLDER_ID', '').strip()
+YANDEX_MODEL = os.getenv('YANDEX_MODEL', 'yandexgpt/latest').strip()
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '').strip()
 ARTICLES_PER_DAY = max(1, int(os.getenv('ARTICLES_PER_DAY', '3')))
@@ -38,4 +43,5 @@ def validate():
     if ARTICLES_PER_DAY > OPENROUTER_DAILY_LIMIT: errors.append('ARTICLES_PER_DAY больше дневного AI-лимита')
     if MIN_ARTICLE_WORDS >= MAX_ARTICLE_WORDS: errors.append('MIN_ARTICLE_WORDS должен быть меньше MAX_ARTICLE_WORDS')
     if not SCHEDULE_HOURS: errors.append('SCHEDULE_HOURS пуст')
+    if bool(YANDEX_API_KEY) != bool(YANDEX_FOLDER_ID): errors.append('Для Yandex AI нужны одновременно YANDEX_API_KEY и YANDEX_FOLDER_ID')
     return errors
