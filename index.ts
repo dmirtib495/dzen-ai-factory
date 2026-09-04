@@ -3,6 +3,7 @@ type Env = {
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
   CONTROL_SECRET: string;
+  GITHUB_TRIGGER_TOKEN: string;
 };
 
 type TgUpdate = any;
@@ -78,7 +79,7 @@ function mainMenu() {
         { text: "📈 Лимит AI", callback_data: "quota" },
       ],
       [
-        { text: "ℹ️ Расписание", callback_data: "generate" },
+        { text: "🚗 Создать статью сейчас", callback_data: "generate" },
         { text: "🔄 Статус", callback_data: "status" },
       ],
     ],
@@ -247,6 +248,35 @@ async function statusText(env: Env) {
   return `🟢 Dzen AI Factory Cloud\n\nНа проверке: ${Number(queued?.n || 0)}\nОдобрено: ${Number(approved?.n || 0)}\nОтклонено: ${Number(rejected?.n || 0)}\n\n${await quota(env)}`;
 }
 
+async function triggerGeneration(env: Env) {
+  if (!env.GITHUB_TRIGGER_TOKEN) {
+    return { ok: false, status: 0, message: "GITHUB_TRIGGER_TOKEN не настроен" };
+  }
+
+  const r = await fetch(
+    "https://api.github.com/repos/dmirtib495/dzen-ai-factory/actions/workflows/dzen-cloud.yml/dispatches",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.GITHUB_TRIGGER_TOKEN}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "dzen-auto-control-worker",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ref: "main" }),
+    }
+  );
+
+  if (r.status === 204) {
+    return { ok: true, status: 204, message: "workflow_dispatch accepted" };
+  }
+
+  const body = await r.text();
+  console.error("GitHub workflow dispatch failed", r.status, body.slice(0, 500));
+  return { ok: false, status: r.status, message: body.slice(0, 500) };
+}
+
 async function handleCallback(
   env: Env,
   chat: string,
@@ -276,10 +306,22 @@ async function handleCallback(
   if (data === "status") return send(env, chat, await statusText(env), mainMenu());
 
   if (data === "generate") {
+    await send(env, chat, "🚗 Запускаю генерацию новой статьи через GitHub Actions…");
+    const result = await triggerGeneration(env);
+
+    if (result.ok) {
+      return send(
+        env,
+        chat,
+        "✅ Генерация запущена. GitHub Actions создаст одну новую статью, синхронизирует её с D1 и пришлёт уведомление в Telegram.",
+        mainMenu()
+      );
+    }
+
     return send(
       env,
       chat,
-      "⏰ Автогенерация настроена через GitHub Actions.\n\nРасписание: 06:00, 12:00 и 18:00 по Москве.\nКнопку ручного запуска подключим следующим этапом.",
+      `❌ Не удалось запустить генерацию. Код GitHub API: ${result.status || "—"}. Проверь GITHUB_TRIGGER_TOKEN в Worker.`,
       mainMenu()
     );
   }
@@ -374,6 +416,17 @@ async function handleUpdate(env: Env, u: TgUpdate) {
   if (text === "/analytics") return send(env, chat, await analytics(env), mainMenu());
   if (text === "/strategy") return send(env, chat, await strategy(env), mainMenu());
   if (text === "/limits") return send(env, chat, await quota(env), mainMenu());
+  if (text === "/generate") {
+    const result = await triggerGeneration(env);
+    return send(
+      env,
+      chat,
+      result.ok
+        ? "✅ Генерация запущена через GitHub Actions."
+        : `❌ Запуск не удался. Код GitHub API: ${result.status || "—"}.`,
+      mainMenu()
+    );
+  }
 
   return send(env, chat, "Команда не распознана. Используй меню:", mainMenu());
 }
@@ -389,6 +442,7 @@ export default {
         telegram_token_configured: Boolean(env.TELEGRAM_BOT_TOKEN),
         telegram_chat_configured: Boolean(env.TELEGRAM_CHAT_ID),
         control_secret_configured: Boolean(env.CONTROL_SECRET),
+        github_trigger_configured: Boolean(env.GITHUB_TRIGGER_TOKEN),
         d1_configured: Boolean(env.DB),
       });
     }
