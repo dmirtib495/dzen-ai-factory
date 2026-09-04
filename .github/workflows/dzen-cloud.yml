@@ -3,15 +3,16 @@ name: Dzen AI Factory - Cloud
 on:
   workflow_dispatch:
   schedule:
-    # 06:00 Moscow = 03:00 UTC
     - cron: "0 3 * * *"
-    # 12:00 Moscow = 09:00 UTC
     - cron: "0 9 * * *"
-    # 18:00 Moscow = 15:00 UTC
     - cron: "0 15 * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: dzen-ai-factory-production
+  cancel-in-progress: false
 
 jobs:
   generate:
@@ -29,6 +30,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -38,6 +40,9 @@ jobs:
       - name: Create environment file
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+          YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -47,6 +52,11 @@ jobs:
           {
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
             echo "OPENROUTER_MODEL=openrouter/free"
+            echo "OPENAI_API_KEY=$OPENAI_API_KEY"
+            echo "OPENAI_MODEL=gpt-5-mini"
+            echo "YANDEX_API_KEY=$YANDEX_API_KEY"
+            echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
+            echo "YANDEX_MODEL=yandexgpt/latest"
             echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
             echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
             echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
@@ -57,6 +67,12 @@ jobs:
             echo "TIMEZONE=Europe/Moscow"
             echo "SCHEDULE_HOURS=6,12,18"
           } > .env
+
+      - name: Validate Python sources
+        run: python -m compileall -q .
+
+      - name: Validate configuration
+        run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
 
       - name: Initialize Cloudflare D1
         run: python cloud/init_d1.py
@@ -76,7 +92,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dzen-factory-${{ github.run_number }}
-          path: |
-            data/
+          path: data/
           if-no-files-found: ignore
           retention-days: 7
