@@ -1,4 +1,4 @@
-# production E2E trigger: 2026-09-05
+# production E2E trigger: 2026-09-05-v2
 name: Dzen Production E2E Now
 
 on:
@@ -47,6 +47,7 @@ jobs:
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
             echo "OPENROUTER_MODEL=openrouter/free"
             echo "DEEPSEEK_MODEL=deepseek/deepseek-chat-v3.1:free"
+            echo "OPENROUTER_EDITOR_MODEL=openai/gpt-oss-120b:free"
             echo "OPENAI_API_KEY=$OPENAI_API_KEY"
             echo "OPENAI_MODEL=gpt-5-mini"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
@@ -59,6 +60,8 @@ jobs:
             echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
             echo "ARTICLES_PER_DAY=1"
             echo "OPENROUTER_DAILY_LIMIT=50"
+            echo "MIN_ARTICLE_WORDS=900"
+            echo "MAX_ARTICLE_WORDS=1400"
             echo "TIMEZONE=Europe/Moscow"
             echo "SCHEDULE_HOURS=6,12,18"
           } > .env
