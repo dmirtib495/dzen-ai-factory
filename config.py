@@ -10,6 +10,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '').strip()
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'openrouter/free').strip()
+DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek/deepseek-chat-v3.1:free').strip()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '').strip()
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5-mini').strip()
 YANDEX_API_KEY = os.getenv('YANDEX_API_KEY', '').strip()
