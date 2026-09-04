@@ -1,0 +1,82 @@
+name: Dzen Production E2E Now
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/e2e-now.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dzen-ai-factory-production
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Create environment file
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+          YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+        run: |
+          {
+            echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+            echo "OPENROUTER_MODEL=openrouter/free"
+            echo "DEEPSEEK_MODEL=deepseek/deepseek-chat-v3.1:free"
+            echo "OPENAI_API_KEY=$OPENAI_API_KEY"
+            echo "OPENAI_MODEL=gpt-5-mini"
+            echo "YANDEX_API_KEY=$YANDEX_API_KEY"
+            echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
+            echo "YANDEX_MODEL=yandexgpt/latest"
+            echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
+            echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
+            echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
+            echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
+            echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
+            echo "ARTICLES_PER_DAY=1"
+            echo "OPENROUTER_DAILY_LIMIT=50"
+            echo "TIMEZONE=Europe/Moscow"
+            echo "SCHEDULE_HOURS=6,12,18"
+          } > .env
+      - name: Validate configuration
+        run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
+      - name: Initialize D1
+        run: python cloud/init_d1.py
+      - name: Sync before generation
+        run: python cloud_sync.py
+      - name: Generate production article
+        run: python main.py --once
+      - name: Sync after generation
+        if: always()
+        run: python cloud_sync.py
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dzen-production-e2e-${{ github.run_number }}
+          path: data/
+          if-no-files-found: ignore
+          retention-days: 7
