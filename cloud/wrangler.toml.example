@@ -1,0 +1,19 @@
+name = "dzen-auto-control"
+main = "src/index.ts"
+compatibility_date = "2026-09-04"
+
+[vars]
+# Set these as secrets, not here:
+# TELEGRAM_BOT_TOKEN
+# TELEGRAM_CHAT_ID
+# CONTROL_SECRET
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dzen-auto"
+database_id = "PUT_D1_DATABASE_ID_HERE"
+
+# Optional R2 image bucket. Leave commented until you want public image delivery.
+# [[r2_buckets]]
+# binding = "IMAGES"
+# bucket_name = "dzen-auto-images"
