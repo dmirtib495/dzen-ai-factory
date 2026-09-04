@@ -51,6 +51,7 @@ jobs:
         run: |
           {
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+            echo "DEEPSEEK_MODEL=deepseek/deepseek-chat-v3.1:free"
             echo "OPENROUTER_MODEL=openrouter/free"
             echo "OPENAI_API_KEY=$OPENAI_API_KEY"
             echo "OPENAI_MODEL=gpt-5-mini"
