@@ -31,3 +31,41 @@ jobs:
         run: python -m compileall -q .
       - name: Validate configuration
         run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
+      - name: Validate AI prompt contracts
+        run: |
+          python - <<'PY'
+          from ai_writer import BASE_SYSTEM, _article_prompt, _yandex_prompt, _final_prompt
+          topic = {
+              'source': 'CI source',
+              'title': 'Как выбрать подержанный автомобиль без лишних расходов',
+              'link': 'https://example.com/article',
+              'summary': 'Краткое описание темы для теста.',
+          }
+          draft = _article_prompt(topic)
+          yandex = _yandex_prompt({
+              'headline': topic['title'],
+              'headlines': [topic['title']] * 5,
+              'category': 'Экономия',
+              'article_markdown': '## Тест\nТекст',
+              'fact_check': ['Проверить: тест'],
+              'image_prompt': 'realistic editorial automotive photo',
+              'source_urls': [topic['link']],
+              'commercial_intent': 5,
+          })
+          final = _final_prompt({
+              'headline': topic['title'],
+              'headlines': [topic['title']] * 5,
+              'category': 'Экономия',
+              'article_markdown': '## Тест\nТекст',
+              'fact_check': ['Проверить: тест'],
+              'image_prompt': 'realistic editorial automotive photo',
+              'source_urls': [topic['link']],
+              'commercial_intent': 5,
+          })
+          assert 'не выдумывай' in BASE_SYSTEM.lower()
+          assert 'https://example.com/article' in draft
+          assert '5–8' in draft and 'чек-лист' in draft
+          assert 'YandexGPT' in yandex and '1000–1300' in yandex
+          assert '12 критериев' in final and '1000–1300' in final
+          print('AI prompt contracts: OK')
+          PY
