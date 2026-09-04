@@ -23,12 +23,14 @@ SYSTEM = f'''Ты главный редактор автомобильного �
 Если точное значение не подтверждено входными данными, пометь его как «нужно проверить».
 Не используй абсолютные обещания и кликбейт. Даже новость превращай в практический разбор для владельца или покупателя.'''
 
-# Сначала пробуем DeepSeek через уже настроенный OpenRouter.
-# Если конкретная модель недоступна на текущем бесплатном маршруте,
-# автоматически переходим к OPENROUTER_MODEL (обычно openrouter/free).
+# Free-first routing. Specific DeepSeek free endpoints are tried before the
+# general OpenRouter free router. The general router is the final safety net.
 MODEL_CHAIN = [
+    "deepseek/deepseek-v4-flash:free",
     "deepseek/deepseek-chat-v3.1:free",
+    "deepseek/deepseek-chat:free",
     OPENROUTER_MODEL,
+    "openrouter/free",
 ]
 
 
@@ -58,9 +60,7 @@ def _as_string_list(value: Any) -> list[str]:
 def _extract(value: Any):
     if isinstance(value, dict):
         return value
-    if not isinstance(value, str):
-        value = _as_text(value)
-    value = value.strip()
+    value = _as_text(value).strip()
     if value.startswith("```"):
         value = re.sub(r"^```(?:json)?\s*|\s*```$", "", value, flags=re.I | re.S)
     try:
@@ -82,13 +82,12 @@ def _normalize(data: Any, model: str) -> dict:
     headline = _as_text(data.get("headline"))
     article = _as_text(data.get("article_markdown"))
     category = _as_text(data.get("category")) or "Стоит ли брать"
-
     headlines = _as_string_list(data.get("headlines"))
+
     if headline and headline not in headlines:
         headlines.insert(0, headline)
     if not headline and headlines:
         headline = headlines[0]
-
     if not headline:
         raise ValueError("AI не вернул заголовок")
     if not article:
@@ -155,35 +154,33 @@ def generate_article(topic):
 
     errors = []
     for model in _models():
-        for attempt in range(2):
-            try:
-                if not reserve():
-                    raise RuntimeError(
-                        f"Дневной лимит OpenRouter исчерпан ({OPENROUTER_DAILY_LIMIT} запросов)"
-                    )
-
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.55,
+        try:
+            if not reserve():
+                raise RuntimeError(
+                    f"Дневной лимит OpenRouter исчерпан ({OPENROUTER_DAILY_LIMIT} запросов)"
                 )
-                raw = response.choices[0].message.content or ""
-                data = _extract(raw)
-                if not data:
-                    raise ValueError("AI вернул невалидный JSON")
-                normalized = _normalize(data, model)
-                log.info("Article generated with model %s", model)
-                return normalized
-            except Exception as exc:
-                message = f"{model}, попытка {attempt + 1}: {exc}"
-                errors.append(message)
-                log.warning("AI generation failed: %s", message)
-                if "429" in str(exc).lower() and attempt == 0:
-                    time.sleep(3)
-                    continue
-                break
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.55,
+            )
+            raw = response.choices[0].message.content or ""
+            data = _extract(raw)
+            if not data:
+                raise ValueError("AI вернул невалидный JSON")
+            normalized = _normalize(data, model)
+            log.info("Article generated with model %s", model)
+            return normalized
+        except Exception as exc:
+            message = f"{model}: {exc}"
+            errors.append(message)
+            log.warning("AI generation failed: %s", message)
+            # Avoid wasting scarce free-tier requests by retrying the same
+            # failing model. Move immediately to the next free provider/model.
+            if "429" in str(exc).lower():
+                time.sleep(1)
 
-    raise RuntimeError("Все AI-модели недоступны: " + " | ".join(errors[-4:]))
+    raise RuntimeError("Все AI-модели недоступны: " + " | ".join(errors[-5:]))
