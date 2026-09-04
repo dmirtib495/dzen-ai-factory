@@ -12,7 +12,7 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '').strip()
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'openrouter/free').strip()
 DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek/deepseek-chat-v3.1:free').strip()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '').strip()
-OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5-mini').strip()
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'openai/gpt-oss-120b:free').strip()
 YANDEX_API_KEY = os.getenv('YANDEX_API_KEY', '').strip()
 YANDEX_FOLDER_ID = os.getenv('YANDEX_FOLDER_ID', '').strip()
 YANDEX_MODEL = os.getenv('YANDEX_MODEL', 'yandexgpt/latest').strip()
@@ -41,7 +41,7 @@ for p in (LOG_DIR, BACKUP_DIR, OUTBOX_DIR, APPROVED_DIR, REJECTED_DIR, ARTICLES_
 def validate():
     errors = []
     if not OPENROUTER_API_KEY: errors.append('OPENROUTER_API_KEY не задан')
-    if ARTICLES_PER_DAY > OPENROUTER_DAILY_LIMIT: errors.append('ARTICLES_PER_DAY больше дневного AI-лимита')
+    if ARTICLES_PER_DAY * 3 > OPENROUTER_DAILY_LIMIT: errors.append('OPENROUTER_DAILY_LIMIT мал для трёх AI-этапов на статью')
     if MIN_ARTICLE_WORDS >= MAX_ARTICLE_WORDS: errors.append('MIN_ARTICLE_WORDS должен быть меньше MAX_ARTICLE_WORDS')
     if not SCHEDULE_HOURS: errors.append('SCHEDULE_HOURS пуст')
     if bool(YANDEX_API_KEY) != bool(YANDEX_FOLDER_ID): errors.append('Для Yandex AI нужны одновременно YANDEX_API_KEY и YANDEX_FOLDER_ID')
