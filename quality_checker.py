@@ -28,13 +28,7 @@ def check_article(data):
     warnings = []
 
     if not isinstance(data, dict):
-        return {
-            "ok": False,
-            "problems": ["Некорректный формат материала"],
-            "warnings": [],
-            "words": 0,
-            "score": 0,
-        }
+        return {"ok": False, "problems": ["Некорректный формат материала"], "warnings": [], "words": 0, "score": 0}
 
     text = _text(data.get("article_markdown"))
     headline = _text(data.get("headline"))
@@ -47,49 +41,40 @@ def check_article(data):
 
     if words < MIN_ARTICLE_WORDS:
         problems.append(f"Мало слов: {words}")
-    if words > MAX_ARTICLE_WORDS + 250:
+    if words > MAX_ARTICLE_WORDS:
         problems.append(f"Слишком много слов: {words}")
-    if len(headline) < 25:
-        problems.append("Слабый/короткий заголовок")
-    if len(headline) > 140:
-        warnings.append("Слишком длинный заголовок")
-    if not fact_check:
-        problems.append("Нет списка проверки фактов")
+    if not (25 <= len(headline) <= 120):
+        problems.append("Заголовок не соответствует редакционному диапазону")
+    if len(fact_check) < 3:
+        problems.append("Недостаточно пунктов проверки фактов")
+    if not sources:
+        problems.append("Нет первоисточника")
     if not image_prompt:
         problems.append("Нет промпта изображения")
-    if headings < 4:
+    if headings < 5:
         problems.append("Мало подзаголовков")
 
-    if re.search(r"\b(100%|гарантированно|точно лучший|самый лучший|никогда|всегда)\b", text, re.I):
+    forbidden = r"\b(100\s*%|гарантированно|точно лучший|самый лучший|никогда|всегда)\b"
+    if re.search(forbidden, text, re.I):
         problems.append("Есть абсолютные утверждения")
 
     suspicious = [
-        r"\bкак известно\b",
-        r"\bэксперты утверждают\b",
-        r"\bисследования показывают\b",
-        r"\bпо статистике\b",
-        r"\bпо данным исследований\b",
+        r"\bкак известно\b", r"\bэксперты утверждают\b", r"\bисследования показывают\b",
+        r"\bпо статистике\b", r"\bпо данным исследований\b",
     ]
     if any(re.search(pattern, text, re.I) for pattern in suspicious) and not sources:
         problems.append("Есть ссылки на данные/экспертов без источников")
-
     if "нужно проверить" in text.lower():
-        warnings.append("В тексте остались факты с пометкой «нужно проверить»")
+        problems.append("В тексте остались непроверенные факты")
 
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     normalized = [re.sub(r"\W+", " ", p.lower()).strip() for p in paragraphs]
     if len(normalized) != len(set(normalized)):
-        warnings.append("Обнаружены повторяющиеся абзацы")
+        problems.append("Обнаружены повторяющиеся абзацы")
 
     score = 100
-    score -= 18 * len(problems)
-    score -= 6 * len(warnings)
+    score -= 15 * len(problems)
+    score -= 5 * len(warnings)
     score = max(0, min(100, score))
-
-    return {
-        "ok": not problems,
-        "problems": problems,
-        "warnings": warnings,
-        "words": words,
-        "score": score,
-    }
+    ok = not problems and score >= 90
+    return {"ok": ok, "problems": problems, "warnings": warnings, "words": words, "score": score}
