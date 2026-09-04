@@ -2,5 +2,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dzen-auto-control",
   "main": "index.ts",
-  "compatibility_date": "2026-09-04"
+  "compatibility_date": "2026-09-04",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dzen-auto",
+      "database_id": "e571c76e-6722-4678-8772-57300174da4e"
+    }
+  ]
 }
