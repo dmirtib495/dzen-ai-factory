@@ -15,10 +15,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Unpack project
-  run: |
-    unzip -oq dzen_ai_factory_bundle.zip -d .
-    rm -f dzen_ai_factory_bundle.zip
-    rm -f .github/workflows/dzen-cloud.yml
+        run: |
+          unzip -oq dzen_ai_factory_bundle.zip -d .
+          rm -f dzen_ai_factory_bundle.zip
+          rm -f .github/workflows/dzen-cloud.yml
 
       - name: Commit project files
         run: |
