@@ -204,7 +204,7 @@ def build_article_docx(
     styles = doc.styles
     styles["Normal"].font.name = "Arial"
     styles["Normal"].font.size = Pt(11)
-    styles["Normal"].paragraph_format.space_after = Pt(6)
+    styles["Normal"].paragraph_format.space_after = Pt(4)
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
