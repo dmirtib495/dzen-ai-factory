@@ -1,4 +1,4 @@
-# acceptance v3: resilient free routing
+# acceptance v4: fixed free models + tagged dispatch
 name: Production Acceptance Run
 
 on:
@@ -38,19 +38,24 @@ jobs:
           if missing:
               raise SystemExit('Worker missing required bindings/secrets: '+', '.join(missing))
           PY
-      - name: Verify configured OpenRouter routing is live and free
+      - name: Verify fixed free models and router fallback
         run: |
           python - <<'PY'
           import requests
-          model_id='openrouter/free'
+          wanted=['google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','openrouter/free']
           data=requests.get('https://openrouter.ai/api/v1/models', timeout=30).json()['data']
           by_id={m['id']:m for m in data}
-          if model_id not in by_id:
-              raise SystemExit(f'Configured OpenRouter model is missing: {model_id}')
-          p=by_id[model_id].get('pricing') or {}
-          print('model=',model_id,'pricing=',p)
-          if float(p.get('prompt') or 0) != 0 or float(p.get('completion') or 0) != 0:
-              raise SystemExit(f'Configured model is no longer free: {model_id}')
+          for model_id in wanted:
+              m=by_id.get(model_id)
+              if not m:
+                  print('model=',model_id,'status=MISSING')
+                  if model_id=='openrouter/free': raise SystemExit('Final router fallback is missing')
+                  continue
+              p=m.get('pricing') or {}
+              params=m.get('supported_parameters') or []
+              print('model=',model_id,'context=',m.get('context_length'),'pricing=',p,'response_format=',('response_format' in params))
+              if float(p.get('prompt') or 0) != 0 or float(p.get('completion') or 0) != 0:
+                  raise SystemExit(f'Model is no longer free: {model_id}')
           PY
       - name: Dispatch production workflow and wait for completion
         env:
@@ -63,7 +68,8 @@ jobs:
           h={'Authorization':f'Bearer {token}','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}
           runs_url=f'https://api.github.com/repos/{repo}/actions/workflows/dzen-cloud.yml/runs?event=workflow_dispatch&per_page=30'
           before={r['id'] for r in requests.get(runs_url,headers=h,timeout=30).json().get('workflow_runs',[])}
-          r=requests.post(f'https://api.github.com/repos/{repo}/actions/workflows/dzen-cloud.yml/dispatches',headers=h,json={'ref':'main'},timeout=30)
+          dispatch=f'https://api.github.com/repos/{repo}/actions/workflows/dzen-cloud.yml/dispatches'
+          r=requests.post(dispatch,headers=h,json={'ref':'main','inputs':{'trigger_source':'acceptance-api'}},timeout=30)
           print('dispatch_status=',r.status_code)
           if r.status_code!=204:
               print(r.text); raise SystemExit(1)
@@ -75,7 +81,7 @@ jobs:
                   target=max(fresh,key=lambda x:x['id']); break
               time.sleep(2)
           if not target: raise SystemExit('Dispatched dzen-cloud run not found')
-          run_id=target['id']; print('production_run_id=',run_id); print('production_run_url=',target['html_url'])
+          run_id=target['id']; print('production_run_id=',run_id); print('production_run_url=',target['html_url']); print('production_run_name=',target.get('display_title'))
           for _ in range(900):
               run=requests.get(f'https://api.github.com/repos/{repo}/actions/runs/{run_id}',headers=h,timeout=30).json()
               if run.get('status')=='completed':
