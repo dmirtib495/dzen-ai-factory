@@ -1,0 +1,26 @@
+name: Export Project ZIP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-project-zip.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build complete project archive
+        run: |
+          zip -r dzen-ai-factory.zip . -x '.git/*' 'dzen-ai-factory.zip'
+      - name: Upload project ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: dzen-ai-factory-complete
+          path: dzen-ai-factory.zip
+          retention-days: 7
