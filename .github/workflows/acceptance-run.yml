@@ -1,4 +1,4 @@
-# acceptance v5: verifiable quality + Telegram delivery
+# acceptance v6: one-article end-to-end after rate-limit and quality-repair fix
 name: Production Acceptance Run
 
 on:
