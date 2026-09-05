@@ -2,6 +2,9 @@ name: Image Provider Diagnostic
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/image-provider-diagnostic.yml'
 
 permissions:
   contents: read
