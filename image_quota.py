@@ -1,7 +1,15 @@
 import os
 from datetime import datetime, timezone
 
-WORKERS_AI_DAILY_NEURON_LIMIT = 10_000.0
+# Cloudflare Free currently provides 10,000 neurons/day. The factory
+# deliberately uses only 34 FLUX Schnell generations/day at the measured
+# 172.8 neurons each, leaving >40% headroom for diagnostics/provider drift.
+WORKERS_AI_FREE_DAILY_NEURON_LIMIT = 10_000.0
+FLUX_SCHNELL_NEURONS_PER_IMAGE = 172.8
+WORKERS_AI_DAILY_GENERATION_LIMIT = 34
+WORKERS_AI_DAILY_NEURON_LIMIT = (
+    FLUX_SCHNELL_NEURONS_PER_IMAGE * WORKERS_AI_DAILY_GENERATION_LIMIT
+)
 WORKERS_AI_RESOURCE = 'workers_ai_neurons'
 
 CLOUD_KEYS = (
@@ -21,13 +29,11 @@ def _cloud_query(sql, params=None):
 
 
 def reserve_neurons(amount: float, limit: float = WORKERS_AI_DAILY_NEURON_LIMIT) -> bool:
-    """Atomically reserve Workers AI neurons before an image inference.
+    """Atomically reserve Workers AI neurons before image inference.
 
-    D1 is the shared source of truth across all scheduled GitHub Actions runs.
-    Reservation happens before calling Workers AI, which prevents concurrent
-    runs from each assuming that the full daily free allocation is available.
-    A failed inference remains conservatively reserved; this can under-use the
-    free allocation but cannot oversubscribe it.
+    D1 is shared by scheduled article runs and image-regeneration runs. Failed
+    inference remains conservatively reserved: this can under-use the allowance
+    but prevents parallel runs from oversubscribing the free tier.
     """
     amount = float(amount)
     limit = float(limit)
@@ -36,8 +42,6 @@ def reserve_neurons(amount: float, limit: float = WORKERS_AI_DAILY_NEURON_LIMIT)
     if amount > limit:
         return False
     if not cloud_enabled():
-        # Production image generation requires shared cloud quota protection.
-        # Refuse rather than silently fall back to a process-local counter.
         return False
 
     now = datetime.now(timezone.utc)
@@ -66,6 +70,7 @@ def status(limit: float = WORKERS_AI_DAILY_NEURON_LIMIT) -> dict:
             'remaining': limit,
             'resource': WORKERS_AI_RESOURCE,
             'mode': 'cloud_required',
+            'generation_limit': WORKERS_AI_DAILY_GENERATION_LIMIT,
         }
 
     day = datetime.now(timezone.utc).date().isoformat()
@@ -81,4 +86,6 @@ def status(limit: float = WORKERS_AI_DAILY_NEURON_LIMIT) -> dict:
         'remaining': max(0.0, limit - used),
         'resource': WORKERS_AI_RESOURCE,
         'mode': 'enforced_shared_d1',
+        'generation_limit': WORKERS_AI_DAILY_GENERATION_LIMIT,
+        'free_tier_limit': WORKERS_AI_FREE_DAILY_NEURON_LIMIT,
     }
