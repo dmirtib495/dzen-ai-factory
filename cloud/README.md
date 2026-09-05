@@ -1,36 +1,46 @@
 # Cloud deployment: GitHub Actions + Cloudflare D1/Worker
 
-Эта папка добавляет облачный контур к Python-фабрике.
+## Единственный production Worker
+Источник правды для Worker находится **в корне репозитория**:
+- `index.ts` — Telegram webhook, D1, `/health`, запуск GitHub Actions через `WORKFLOW_TRIGGER_TOKEN`;
+- `wrangler.jsonc` — production-конфигурация Wrangler и D1 binding `DB`.
 
-## Роли
-- GitHub Actions: запускает Python 3 раза в день и вручную.
-- Cloudflare D1: постоянное хранилище состояния/статистики.
-- Cloudflare Worker: Telegram webhook и панель управления 24/7.
-- OpenRouter: генерация текста.
-- R2 подключается отдельно при необходимости хранения обложек.
+`cloud/src/index.ts` был устаревшей заглушкой и удалён. Не создавайте вторую реализацию Worker в `cloud/`.
 
-## Важно
-Секреты не должны попадать в git. В GitHub Secrets используйте:
-`OPENROUTER_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`.
+## Обязательные GitHub Actions Secrets
+- `OPENROUTER_API_KEY`
+- `YANDEX_API_KEY`
+- `YANDEX_FOLDER_ID`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_D1_DATABASE_ID`
 
-Для D1 API Cloudflare официально поддерживает POST `/accounts/{account_id}/d1/database/{database_id}/query` с API Token и SQL-параметрами.
+`YANDEX_API_KEY` и `YANDEX_FOLDER_ID` обязательны: YandexGPT — обязательный редакционный этап. `config.validate()` останавливает workflow до первого запроса к OpenRouter, если они отсутствуют.
 
-## Первичная настройка
-1. Создать аккаунт Cloudflare.
-2. Создать D1 database `dzen-auto`.
-3. Выполнить `schema.sql` через Wrangler/Dashboard.
-4. Скопировать `wrangler.toml.example` в `wrangler.toml` и вставить database_id.
-5. Задать Worker secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `CONTROL_SECRET`.
-6. Деплоить Worker из `cloud/`.
-7. Один раз вызвать POST `/set-webhook` с заголовком `x-control-secret`.
-8. Создать GitHub Secrets из списка выше.
-9. Положить проект в GitHub repository. Для полностью бесплатного Actions используйте public repository.
-10. В Actions запустить `Dzen AI Factory — Cloud` вручную для первого теста.
+## Worker secrets
+Worker должен иметь:
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `CONTROL_SECRET`
+- `WORKFLOW_TRIGGER_TOKEN`
+
+`WORKFLOW_TRIGGER_TOKEN` — fine-grained GitHub PAT с правами **Actions: Read and write** на `dmirtib495/dzen-ai-factory`. Его можно установить workflow `Set Cloudflare Worker Secrets` или командой `npx wrangler secret put WORKFLOW_TRIGGER_TOKEN --config wrangler.jsonc`.
+
+## D1 и деплой
+1. D1 database: `dzen-auto`.
+2. Применить `cloud/schema.sql` к D1.
+3. Проверить binding `DB` в корневом `wrangler.jsonc`.
+4. Деплоить из **корня**: `npx wrangler deploy --config wrangler.jsonc`.
+5. Проверить `https://dzen-auto-control.c4dftyhvv2.workers.dev/health`.
+6. Один раз настроить Telegram webhook через `POST /set-webhook` с `x-control-secret`.
+7. Кнопка «🚗 Создать статью сейчас» должна делать GitHub `workflow_dispatch` для `.github/workflows/dzen-cloud.yml`.
 
 ## Расписание
-Workflow использует UTC:
+Workflow `.github/workflows/dzen-cloud.yml` запускается:
 - 03:00 UTC = 06:00 Europe/Moscow
 - 09:00 UTC = 12:00 Europe/Moscow
 - 15:00 UTC = 18:00 Europe/Moscow
 
-GitHub отмечает, что scheduled workflows могут запускаться с задержкой. Не привязывайте бизнес-логику к точной секунде.
+В каждом scheduled run установлено `ARTICLES_PER_DAY=1`, поэтому штатная производительность — **3 статьи в сутки**, если каждая проходит AI-цепочку и quality gate.
