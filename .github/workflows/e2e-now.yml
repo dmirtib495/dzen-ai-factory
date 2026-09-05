@@ -1,4 +1,4 @@
-# production E2E trigger: 2026-09-05-v10-current-production
+# production E2E trigger: 2026-09-05-v11-clean-quota-skip
 name: Dzen Production E2E Now
 
 on:
@@ -69,25 +69,31 @@ jobs:
       - name: Initialize D1
         run: python cloud/init_d1.py
       - name: Shared quota preflight
+        id: quota
         run: |
           python - <<'PY'
+          import os
           from quota import status as text_status
           from image_quota import status as image_status, FLUX_SCHNELL_NEURONS_PER_IMAGE
           t=text_status(); i=image_status()
           print('TEXT_QUOTA',t)
           print('IMAGE_QUOTA',i)
-          # One modern accepted article measured about 10 OpenRouter attempts.
-          # Do not consume the reserve if fewer than 10 attempts remain.
-          if int(t.get('remaining',0)) < 10:
-              raise SystemExit(78)
-          # Adaptive image set may fall to 3, but never lower.
-          if float(i.get('remaining',0)) + 1e-6 < 3*FLUX_SCHNELL_NEURONS_PER_IMAGE:
-              raise SystemExit(78)
-          print('E2E_QUOTA_PREFLIGHT_OK')
+          can_run = (
+              int(t.get('remaining',0)) >= 10 and
+              float(i.get('remaining',0)) + 1e-6 >= 3*FLUX_SCHNELL_NEURONS_PER_IMAGE
+          )
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as fh:
+              fh.write(f"can_run={'true' if can_run else 'false'}\n")
+          if can_run:
+              print('E2E_QUOTA_PREFLIGHT_OK')
+          else:
+              print('E2E_SKIPPED_BY_SHARED_DAILY_QUOTA')
           PY
       - name: Sync before generation
+        if: steps.quota.outputs.can_run == 'true'
         run: python cloud_sync.py
       - name: Generate one production article
+        if: steps.quota.outputs.can_run == 'true'
         run: |
           python -c "from pipeline import generate_batch; n=generate_batch(); print('publication_grade_articles=', n); raise SystemExit(0 if n == 1 else 2)"
       - name: Sync after generation
