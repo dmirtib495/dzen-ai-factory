@@ -67,6 +67,15 @@ def _extract(value: Any):
             return None
 
 
+def _source_evidence(topic: dict) -> dict:
+    return {
+        "title": _as_text(topic.get("title")),
+        "source": _as_text(topic.get("source")),
+        "url": _as_text(topic.get("link")),
+        "summary": _as_text(topic.get("summary")),
+    }
+
+
 def _normalize(data: Any, provider: str, model: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("AI вернул некорректную структуру")
@@ -104,6 +113,8 @@ def _normalize(data: Any, provider: str, model: str) -> dict:
     }
     if isinstance(data.get("ai_quality_audit"), dict):
         result["ai_quality_audit"] = data["ai_quality_audit"]
+    if isinstance(data.get("source_evidence"), dict):
+        result["source_evidence"] = dict(data["source_evidence"])
     return result
 
 
@@ -218,6 +229,11 @@ def _draft(topic: dict) -> dict:
     provider = "FixedFree/OpenRouter" if requested_model == DEEPSEEK_MODEL else "OpenRouter"
     data = _normalize(parsed, provider, actual_model)
     data["source_urls"] = sources
+    data["source_evidence"] = _source_evidence(topic)
+    log.info(
+        "DRAFT_OK headline=%r model=%s source_summary_chars=%s",
+        data.get("headline"), actual_model, len(data["source_evidence"].get("summary", "")),
+    )
     return data
 
 
@@ -316,8 +332,6 @@ def _mechanical_quality_cleanup(data: dict) -> dict:
         text = re.sub(pattern, replacement, text, flags=re.I)
         headline = re.sub(pattern, replacement, headline, flags=re.I)
 
-    # More than eight H2 headings is a deterministic formatting rejection.
-    # Preserve the section text but demote only the extra headings to bold labels.
     heading_seen = 0
     lines = []
     for line in text.splitlines():
@@ -360,6 +374,7 @@ def _repair(data: dict, topic: dict) -> dict:
         )
         data = _merge_editor(data, parsed, "Repair/OpenRouter", actual_model)
         data["source_urls"] = _source_urls(topic)
+        data["source_evidence"] = _source_evidence(topic)
         data.pop("ai_quality_audit", None)
 
     data = _mechanical_quality_cleanup(data)
@@ -375,10 +390,13 @@ def generate_article(topic):
     data = _draft(topic)
     data = _yandex_edit(data)
     data["source_urls"] = sources
+    data["source_evidence"] = _source_evidence(topic)
     data = _final_edit(data)
     data["source_urls"] = sources
+    data["source_evidence"] = _source_evidence(topic)
     data = _repair(data, topic)
     data["source_urls"] = sources
+    data["source_evidence"] = _source_evidence(topic)
     data = _mechanical_quality_cleanup(data)
 
     final_quality = check_article(data, require_ai_audit=True)
@@ -390,6 +408,7 @@ def generate_article(topic):
                 *(final_quality.get("warnings") or []),
             ]
         raise ValueError("Материал не прошёл финальный professional quality gate: " + "; ".join(details))
+    data.pop("source_evidence", None)
     return data
 
 
