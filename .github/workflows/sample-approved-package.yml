@@ -1,4 +1,4 @@
-# final delivery: sample-article-8
+# final delivery: sample-article-8-v2
 name: Rebuild Approved Sample Package
 
 on:
@@ -104,7 +104,7 @@ jobs:
       - name: Upload delivered sample artifact
         uses: actions/upload-artifact@v4
         with:
-          name: approved-sample-article-8-delivered
+          name: approved-sample-article-8-delivered-v2
           path: |
             data/packages/
             data/current_package.json
