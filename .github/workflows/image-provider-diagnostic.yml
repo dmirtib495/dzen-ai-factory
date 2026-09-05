@@ -1,9 +1,7 @@
 name: Image Provider Diagnostic
 
 on:
-  push:
-    paths:
-      - '.github/workflows/image-provider-diagnostic.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,9 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,103 +20,77 @@ jobs:
           python-version: '3.12'
       - name: Install test dependencies
         run: pip install requests Pillow
-      - name: Run real provider tests
+      - name: Run real Cloudflare Workers AI tests
         run: |
           python - <<'PY'
-          import base64, io, json, os, time
+          import base64, io, json, math, os, time
           from pathlib import Path
-          from urllib.parse import quote
           import requests
           from PIL import Image
 
-          out = Path('image_diagnostic')
+          MODEL='@cf/black-forest-labs/flux-1-schnell'
+          STEPS=4
+          TILE_NEURONS=4.80
+          STEP_NEURONS=9.60
+          out=Path('image_diagnostic')
           out.mkdir(exist_ok=True)
-          results = []
-          prompts = [
+          results=[]
+          prompts=[
               'photorealistic editorial automotive photo of a black Toyota Crown 2017 parked on a clean European city street, natural daylight, realistic proportions, no text, no watermark',
               'photorealistic editorial automotive photo of a silver Audi sedan driving on a mountain road, natural daylight, realistic wheels and body proportions, no text, no watermark',
               'photorealistic editorial automotive photo of a white Tesla Model 3 parked near modern architecture, overcast daylight, realistic reflections, no text, no watermark',
           ]
+          token=os.getenv('CLOUDFLARE_AI_API_TOKEN','').strip()
+          account=os.getenv('CLOUDFLARE_ACCOUNT_ID','').strip()
+          if not token:
+              raise SystemExit('CLOUDFLARE_AI_API_TOKEN is missing')
+          if not account:
+              raise SystemExit('CLOUDFLARE_ACCOUNT_ID is missing')
+          url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{MODEL}'
 
-          def validate(raw):
-              im = Image.open(io.BytesIO(raw))
-              im.load()
-              return im.format, im.size
-
-          # 1) Cloudflare Workers AI - existing project credentials.
-          cf_token = os.getenv('CLOUDFLARE_API_TOKEN','').strip()
-          cf_account = os.getenv('CLOUDFLARE_ACCOUNT_ID','').strip()
-          for i, prompt in enumerate(prompts, 1):
-              started = time.time()
-              row = {'provider':'cloudflare','attempt':i}
+          for i,prompt in enumerate(prompts,1):
+              started=time.time()
+              row={'provider':'cloudflare','model':MODEL,'attempt':i,'steps':STEPS}
               try:
-                  if not (cf_token and cf_account):
-                      raise RuntimeError('Cloudflare credentials missing')
-                  url = f'https://api.cloudflare.com/client/v4/accounts/{cf_account}/ai/run/@cf/black-forest-labs/flux-1-schnell'
-                  r = requests.post(url, headers={'Authorization':f'Bearer {cf_token}','Content-Type':'application/json'}, json={'prompt':prompt,'steps':4,'seed':1000+i}, timeout=180)
-                  row['http_status'] = r.status_code
+                  r=requests.post(
+                      url,
+                      headers={'Authorization':f'Bearer {token}','Content-Type':'application/json'},
+                      json={'prompt':prompt,'steps':STEPS,'seed':1000+i},
+                      timeout=180,
+                  )
+                  row['http_status']=r.status_code
+                  row['seconds']=round(time.time()-started,2)
+                  row['cf_ray']=r.headers.get('cf-ray')
+                  row['usage_header_candidates']={k:v for k,v in r.headers.items() if 'usage' in k.lower() or 'neuron' in k.lower()}
                   r.raise_for_status()
-                  payload = r.json()
-                  image64 = (payload.get('result') or {}).get('image')
+                  payload=r.json()
+                  image64=(payload.get('result') or {}).get('image')
                   if not image64:
                       raise RuntimeError('No result.image in Cloudflare response')
-                  raw = base64.b64decode(image64)
-                  fmt, size = validate(raw)
-                  path = out / f'cloudflare_{i}.jpg'
+                  raw=base64.b64decode(image64)
+                  im=Image.open(io.BytesIO(raw)); im.load()
+                  width,height=im.size
+                  tiles=math.ceil(width/512)*math.ceil(height/512)
+                  billed_neurons=round(tiles*TILE_NEURONS + STEPS*STEP_NEURONS,2)
+                  path=out/f'cloudflare_{i}.jpg'
                   path.write_bytes(raw)
-                  row.update(ok=True, seconds=round(time.time()-started,2), bytes=len(raw), format=fmt, size=list(size))
+                  row.update(
+                      ok=True,
+                      bytes=len(raw),
+                      format=im.format,
+                      resolution=[width,height],
+                      tiles_512=tiles,
+                      billed_neurons_from_actual_output=billed_neurons,
+                      api_usage=(payload.get('result') or {}).get('usage') or payload.get('usage'),
+                  )
               except Exception as e:
-                  row.update(ok=False, seconds=round(time.time()-started,2), error=str(e)[:500])
+                  row.update(ok=False,seconds=round(time.time()-started,2),error=str(e)[:800])
               results.append(row)
-              print('RESULT', json.dumps(row, ensure_ascii=False))
+              print('RESULT',json.dumps(row,ensure_ascii=False))
 
-          # 2) Pollinations - deliberately no key, to verify whether anonymous free access is actually usable now.
-          for i, prompt in enumerate(prompts, 1):
-              started = time.time()
-              row = {'provider':'pollinations_anonymous','attempt':i}
-              try:
-                  url = f'https://gen.pollinations.ai/image/{quote(prompt, safe="")}?model=zimage&width=1024&height=576&seed={2000+i}&nologo=true'
-                  r = requests.get(url, timeout=300)
-                  row['http_status'] = r.status_code
-                  row['content_type'] = r.headers.get('content-type')
-                  row['retry_after'] = r.headers.get('retry-after')
-                  r.raise_for_status()
-                  raw = r.content
-                  fmt, size = validate(raw)
-                  path = out / f'pollinations_{i}.jpg'
-                  path.write_bytes(raw)
-                  row.update(ok=True, seconds=round(time.time()-started,2), bytes=len(raw), format=fmt, size=list(size))
-              except Exception as e:
-                  row.update(ok=False, seconds=round(time.time()-started,2), error=str(e)[:500])
-              results.append(row)
-              print('RESULT', json.dumps(row, ensure_ascii=False))
-
-          # 3) Hugging Face Inference Providers. Test only if an account token already exists.
-          hf = os.getenv('HF_TOKEN','').strip()
-          if not hf:
-              row = {'provider':'huggingface','attempt':0,'ok':False,'error':'HF_TOKEN secret is not configured in this repository; authenticated free-account test cannot be claimed'}
-              results.append(row)
-              print('RESULT', json.dumps(row, ensure_ascii=False))
-          else:
-              for i, prompt in enumerate(prompts, 1):
-                  started = time.time()
-                  row = {'provider':'huggingface','attempt':i}
-                  try:
-                      url = 'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell'
-                      r = requests.post(url, headers={'Authorization':f'Bearer {hf}','Content-Type':'application/json','Accept':'image/jpeg'}, json={'inputs':prompt}, timeout=300)
-                      row['http_status'] = r.status_code
-                      r.raise_for_status()
-                      raw = r.content
-                      fmt, size = validate(raw)
-                      path = out / f'huggingface_{i}.jpg'
-                      path.write_bytes(raw)
-                      row.update(ok=True, seconds=round(time.time()-started,2), bytes=len(raw), format=fmt, size=list(size))
-                  except Exception as e:
-                      row.update(ok=False, seconds=round(time.time()-started,2), error=str(e)[:500])
-                  results.append(row)
-                  print('RESULT', json.dumps(row, ensure_ascii=False))
-
-          (out/'results.json').write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
+          (out/'results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
+          if not all(r.get('ok') for r in results):
+              raise SystemExit('One or more Cloudflare image generations failed')
           PY
       - name: Upload diagnostic results
         if: always()
