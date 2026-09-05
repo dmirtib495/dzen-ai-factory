@@ -79,6 +79,17 @@ def generate_batch():
                 chosen = _text(data.get("headline"))
                 candidates = rank_titles(data.get("headlines", []), data.get("category", ""))
                 quality = check_article(data, require_ai_audit=True)
+                log.info(
+                    "QUALITY_CHECK headline=%r ok=%s score=%s words=%s headings=%s problems=%s warnings=%s ai_audit_score=%s",
+                    chosen,
+                    quality.get("ok"),
+                    quality.get("score"),
+                    quality.get("words"),
+                    quality.get("headings"),
+                    quality.get("problems"),
+                    quality.get("warnings"),
+                    quality.get("ai_audit_score"),
+                )
                 if not quality["ok"]:
                     update_topic_status(topic["id"], "rejected_quality")
                     log.warning("Rejected after professional gate: %s: %s", chosen, quality["problems"])
@@ -102,7 +113,13 @@ def generate_batch():
                     f"Слов: {quality['words']}\nПодзаголовков: {quality.get('headings', '—')}\n"
                     f"AI-цепочка: {stage_text}\nИсточников: {len(data.get('source_urls', []))}\nID: {aid}"
                 )
-                notify_article(header, data.get("article_markdown", ""))
+                message_ids = notify_article(header, data.get("article_markdown", ""))
+                if not message_ids:
+                    raise RuntimeError("Telegram не подтвердил доставку статьи")
+                log.info(
+                    "ARTICLE_ACCEPTED id=%s headline=%r quality_score=%s ai_audit_score=%s telegram_message_ids=%s path=%s",
+                    aid, chosen, quality.get("score"), audit_score, message_ids, path,
+                )
                 made += 1
             except Exception as exc:
                 crashed += 1
