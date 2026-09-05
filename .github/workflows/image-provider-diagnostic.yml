@@ -68,7 +68,7 @@ jobs:
               started=time.time()
               row={'provider':'cloudflare','model':MODEL,'attempt':i,'steps':STEPS}
               try:
-                  r=requests.post(url,headers=headers,json={'prompt':prompt,'steps':STEPS,'seed':1000+i},timeout=180)
+                  r=requests.post(url,headers=headers,json={'prompt':prompt,'steps':STEPS},timeout=180)
                   row['http_status']=r.status_code
                   row['seconds']=round(time.time()-started,2)
                   row['cf_ray']=r.headers.get('cf-ray')
