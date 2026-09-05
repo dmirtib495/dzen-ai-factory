@@ -13,31 +13,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect dzen.guru post-table JavaScript
+      - name: Test public dzen.guru trend endpoints
         run: |
           python - <<'PY'
-          import re, requests
+          import json, re, requests
           base='https://dzen.guru'
-          page=requests.get(base+'/channels/zr.ru/posts',headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
+          headers={'User-Agent':'Mozilla/5.0','Accept':'application/json','Accept-Language':'ru-RU,ru;q=0.9'}
+          for slug in ['zr.ru','autovybor','avtovodsostazhem','mexvod']:
+              url=f'{base}/api/channels/{slug}/posts?offset=0&limit=12&period=30'
+              r=requests.get(url,headers=headers,timeout=30)
+              print('\nPOSTS',slug,'HTTP',r.status_code,'TYPE',r.headers.get('content-type'),'LEN',len(r.content))
+              try:
+                  data=r.json()
+              except Exception:
+                  print('BODY',r.text[:500]); continue
+              items=data.get('items') or []
+              print('TOTAL',data.get('total'),'ITEMS',len(items))
+              for item in sorted(items,key=lambda x: x.get('views') or 0,reverse=True)[:5]:
+                  print('POST',json.dumps({k:item.get(k) for k in ['title','url','views','reads','likes','comments','type','format','publishedAt','published_at']},ensure_ascii=False))
+
+          # Locate fetchChannels implementation and print its exact API path.
+          page=requests.get(base+'/channels/niche/avto',headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
           scripts=re.findall(r'<script[^>]+src=["\']([^"\']+)',page,re.I)
-          print('SCRIPTS',len(scripts))
-          needles=['supabase','channel_posts','posts','views','reach','publication','publisher','slug','select(','from(']
           for src in scripts:
-            if not src.startswith('/_next/static/chunks/'):
-              continue
-            try:
+              if not src.startswith('/_next/static/chunks/'):
+                  continue
               text=requests.get(base+src,headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
-            except Exception:
-              continue
-            low=text.lower()
-            if not any(n in low for n in ['supabase','channelposts','poststable','views30days','reachperpublication']):
-              continue
-            print('\nCHUNK',src,'LEN',len(text))
-            for needle in needles:
-              hits=[m.start() for m in re.finditer(re.escape(needle.lower()),low)]
-              if not hits: continue
-              print(' NEEDLE',needle,'HITS',len(hits))
-              for pos in hits[:8]:
-                snippet=re.sub(r'\s+',' ',text[max(0,pos-450):pos+900])
-                print('  CTX',snippet[:1400])
+              if 'fetchChannels' not in text and 'fetchChannelPosts' not in text:
+                  continue
+              print('\nAPI_CHUNK',src,'LEN',len(text))
+              for m in re.finditer(r'/api/channels',text):
+                  print('API_CTX',re.sub(r'\s+',' ',text[max(0,m.start()-700):m.start()+1200])[:1900])
           PY
