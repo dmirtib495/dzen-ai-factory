@@ -55,12 +55,15 @@ def notify_article(header, article_markdown):
     return sent
 
 
-def notify_image_set(preview_path, *, headline: str, batch_id: int, attempt: int):
-    """Send one contact-sheet preview and one decision pair for all five images."""
+def notify_image_set(preview_path, *, headline: str, batch_id: int, attempt: int, image_count: int = 5):
+    """Send one contact-sheet preview and one decision pair for a 3-5 image set."""
     _require_telegram()
     path = Path(preview_path)
     if not path.is_file():
         raise FileNotFoundError(str(path))
+    image_count = int(image_count)
+    if image_count < 3 or image_count > 5:
+        raise ValueError(f'image_count must be between 3 and 5; got {image_count}')
     keyboard = {
         'inline_keyboard': [[
             {'text': '✅ Набор ок', 'callback_data': f'imageset_ok:{batch_id}'},
@@ -70,7 +73,7 @@ def notify_image_set(preview_path, *, headline: str, batch_id: int, attempt: int
     caption = (
         f'🖼 Набор изображений #{batch_id} · попытка {attempt}\n\n'
         f'{headline}\n\n'
-        'Проверь пять кадров как единый набор.'
+        f'Проверь {image_count} кадров как единый набор.'
     )
     with path.open('rb') as fh:
         response = requests.post(
@@ -88,7 +91,7 @@ def notify_image_set(preview_path, *, headline: str, batch_id: int, attempt: int
     if not data.get('ok'):
         raise RuntimeError('Telegram sendPhoto ok=false: ' + str(data.get('description', 'unknown error')))
     message_id = (data.get('result') or {}).get('message_id')
-    print(f'TELEGRAM_IMAGE_SET_OK batch_id={batch_id} message_id={message_id}')
+    print(f'TELEGRAM_IMAGE_SET_OK batch_id={batch_id} image_count={image_count} message_id={message_id}')
     return message_id
 
 
