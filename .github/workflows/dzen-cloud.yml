@@ -1,7 +1,13 @@
 name: Dzen AI Factory - Cloud
+run-name: Dzen AI Factory - Cloud [${{ github.event.inputs.trigger_source || 'schedule' }}]
 
 on:
   workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: 'Who triggered this run'
+        required: false
+        default: 'manual-ui'
   schedule:
     - cron: "0 3 * * *"
     - cron: "0 9 * * *"
