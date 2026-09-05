@@ -1,4 +1,4 @@
-# rerun sanitized RSS acceptance: 2026-09-05
+# rerun sanitized RSS acceptance: 2026-09-05-v2
 name: RSS Diagnostic Now
 
 on:
@@ -30,7 +30,7 @@ jobs:
           python - <<'PY'
           import xml.etree.ElementTree as ET
           import requests, feedparser
-          from topic_hunter import _xml_safe_named_entities, _parse_feed
+          from topic_hunter import _sanitized_xml_bytes, _parse_feed
 
           url='https://www.drom.ru/export/xml/reviews.rss'
           raw=requests.get(url,timeout=30); raw.raise_for_status()
@@ -50,7 +50,7 @@ jobs:
                   lines=raw.text.splitlines()
                   print('offending_xml_line=',lines[line-1][:1200])
 
-          sanitized=_xml_safe_named_entities(raw.text)
+          sanitized=_sanitized_xml_bytes(raw)
           ET.fromstring(sanitized)
           print('sanitized_stdlib_xml=VALID')
           feed=_parse_feed(url)
