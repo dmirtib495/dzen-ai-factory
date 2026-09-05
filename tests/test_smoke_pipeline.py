@@ -40,6 +40,25 @@ def test_yandex_stage_fails_before_http_when_credentials_missing(monkeypatch):
         ai_writer._yandex_edit({'headline': 'x', 'article_markdown': 'y'})
 
 
+def test_openrouter_json_retries_malformed_response_and_records_actual_model(monkeypatch):
+    import ai_writer
+    replies = iter([
+        types.SimpleNamespace(model='free/model-a', choices=[types.SimpleNamespace(message=types.SimpleNamespace(content='not json'))]),
+        types.SimpleNamespace(model='free/model-b', choices=[types.SimpleNamespace(message=types.SimpleNamespace(content='{"headline":"ok"}'))]),
+    ])
+    calls = []
+    def fake_call(model, messages, temperature=0.2):
+        calls.append((model, messages[-1]['content']))
+        return next(replies)
+    monkeypatch.setattr(ai_writer, '_or_call', fake_call)
+    parsed, requested, actual = ai_writer._openrouter_json(['openrouter/free'], 'prompt', 'test-role', 0.0, 'test')
+    assert parsed == {'headline': 'ok'}
+    assert requested == 'openrouter/free'
+    assert actual == 'free/model-b'
+    assert len(calls) == 2
+    assert 'ПОВТОР ПОСЛЕ ОШИБКИ ФОРМАТА' in calls[1][1]
+
+
 def test_topic_hunter_accepts_live_shaped_english_auto_item(monkeypatch):
     import topic_hunter
     entry = types.SimpleNamespace(
@@ -57,6 +76,23 @@ def test_topic_hunter_accepts_live_shaped_english_auto_item(monkeypatch):
     assert len(topics) == 1
     assert topics[0]['id'] == 123
     assert topics[0]['link'].startswith('https://')
+
+
+def test_topic_hunter_skips_malformed_entry_without_crashing(monkeypatch):
+    import topic_hunter
+    class BadValue:
+        def __str__(self):
+            raise RuntimeError('broken entry')
+    bad = types.SimpleNamespace(title=BadValue(), link='https://example.com/bad', summary='', published_parsed=None)
+    good = types.SimpleNamespace(title='Toyota car maintenance review', link='https://example.com/good', summary='buy cost repair', published_parsed=None)
+    feed = types.SimpleNamespace(entries=[bad, good], feed={'title': 'Test feed'}, bozo=1, bozo_exception=ValueError('bad xml'))
+    monkeypatch.setattr(topic_hunter, 'RSS_SOURCES', ['https://example.com/feed.xml'])
+    monkeypatch.setattr(topic_hunter.feedparser, 'parse', lambda _url: feed)
+    monkeypatch.setattr(topic_hunter, 'topic_seen', lambda _title: False)
+    monkeypatch.setattr(topic_hunter, 'add_topic', lambda *args: 321)
+    topics = topic_hunter.collect_topics(5)
+    assert len(topics) == 1
+    assert topics[0]['link'] == 'https://example.com/good'
 
 
 def test_pipeline_handles_empty_topic_feed_without_provider_call(monkeypatch):
