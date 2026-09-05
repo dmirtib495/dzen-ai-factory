@@ -31,23 +31,26 @@ def _text(value):
     return str(value).strip()
 
 
+def _safe(label, fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except Exception:
+        log.exception("Non-fatal step failed, continuing: %s", label)
+        return None
+
+
 def generate_batch():
     with RunLock():
-        hydrate_local()
-        backup_db()
+        _safe("hydrate_local", hydrate_local)
+        _safe("backup_db", backup_db)
         learn_strategy()
         topics = rank(collect_topics(max(40, ARTICLES_PER_DAY * 12)))
         preferred = recommended_categories()
-        topics = sorted(
-            topics,
-            key=lambda t: (
-                preferred.index(t.get("category", "")) if t.get("category", "") in preferred else 99,
-                -float(t.get("score", 0)),
-            ),
-        )
+        topics = sorted(topics, key=lambda t: (preferred.index(t.get("category", "")) if t.get("category", "") in preferred else 99, -float(t.get("score", 0))))
 
         made = 0
         attempted = 0
+        crashed = 0
         max_attempts = min(len(topics), max(8, ARTICLES_PER_DAY * 10))
 
         for topic in topics:
@@ -56,9 +59,6 @@ def generate_batch():
             attempted += 1
             try:
                 data = generate_article(topic)
-
-                # The headline returned by generate_article has already passed the final
-                # editor and independent AI audit. Do not silently replace it afterwards.
                 chosen = _text(data.get("headline"))
                 candidates = rank_titles(data.get("headlines", []), data.get("category", ""))
                 quality = check_article(data, require_ai_audit=True)
@@ -69,12 +69,10 @@ def generate_batch():
 
                 image = make_cover(chosen, data.get("category", "Авто"))
                 path = save_to_queue(data, image)
-                aid = add_article(
-                    topic["id"], chosen, path, True, "", data.get("category", ""), image, "queued"
-                )
+                aid = add_article(topic["id"], chosen, path, True, "", data.get("category", ""), image, "queued")
                 add_title_candidates(aid, candidates, chosen)
                 update_topic_status(topic["id"], "used")
-                sync_local()
+                _safe("sync_local", sync_local)
 
                 stages = data.get("ai_stages", [])
                 stage_text = " → ".join(_text(x) for x in stages if _text(x))
@@ -82,22 +80,23 @@ def generate_batch():
                 audit_score = audit.get("total_score", "—")
                 header = (
                     f"🚗 Авто без переплаты\nМатериал {made + 1}/{ARTICLES_PER_DAY}\n\n{chosen}\n"
-                    f"Категория: {data.get('category', '')}\n"
-                    f"Проверка: ✅ PROFESSIONAL PASS\n"
-                    f"Quality gate: {quality['score']}/100\n"
-                    f"Независимый AI-аудит: {audit_score}/100\n"
+                    f"Категория: {data.get('category', '')}\nПроверка: ✅ PROFESSIONAL PASS\n"
+                    f"Quality gate: {quality['score']}/100\nНезависимый AI-аудит: {audit_score}/100\n"
                     f"Слов: {quality['words']}\nПодзаголовков: {quality.get('headings', '—')}\n"
-                    f"AI-цепочка: {stage_text}\n"
-                    f"Источников: {len(data.get('source_urls', []))}\nID: {aid}"
+                    f"AI-цепочка: {stage_text}\nИсточников: {len(data.get('source_urls', []))}\nID: {aid}"
                 )
                 notify_article(header, data.get("article_markdown", ""))
                 made += 1
-            except Exception as exc:
+            except Exception:
+                crashed += 1
                 update_topic_status(topic["id"], "error")
                 log.exception("Topic failed: %s", topic.get("title"))
 
         learn_strategy()
-        sync_local()
+        _safe("sync_local", sync_local)
         if made == 0:
-            notify("⚠️ Авто без переплаты: ни один материал не прошёл professional quality gate. Брак не отправлен и не поставлен в публикацию.")
+            if crashed >= attempted and attempted > 0:
+                notify(f"⚠️ Авто без переплаты: ни одной статьи не создано — все попытки упали с ошибкой ДО проверки качества (проверь секреты/квоты/доступность AI-провайдеров в логах), попыток: {attempted}.")
+            else:
+                notify("⚠️ Авто без переплаты: ни один материал не прошёл professional quality gate. Брак не отправлен и не поставлен в публикацию.")
         return made
