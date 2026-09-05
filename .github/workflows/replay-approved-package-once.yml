@@ -1,0 +1,89 @@
+name: Replay Approved Package Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/replay-approved-package-once.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dzen-package-finalizer
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Initialize D1 schema
+        run: python cloud/init_d1.py
+      - name: Download already approved image set
+        uses: actions/download-artifact@v4
+        with:
+          name: image-batch-2
+          path: source-artifact
+          run-id: '33983574095'
+          github-token: ${{ github.token }}
+      - name: Rebuild article 8 from approved batch 1
+        run: >-
+          python finalize_article_package.py
+          --article-id '8'
+          --batch-id '1'
+          --source-root source-artifact
+      - name: Verify package structure
+        run: |
+          python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          p=json.loads(Path('data/current_package.json').read_text(encoding='utf-8'))
+          z=Path(p['zip'])
+          assert z.is_file() and z.stat().st_size > 0
+          with zipfile.ZipFile(z) as f:
+              names=set(f.namelist())
+              assert 'article.docx' in names
+              assert 'article.md' in names
+              assert 'headline.txt' in names
+              assert 'package_manifest.json' in names
+              images=[n for n in names if n.startswith('images/') and n.lower().endswith(('.jpg','.jpeg','.png'))]
+              assert len(images)==5, images
+          print('PACKAGE_STRUCTURE_OK', z, len(images))
+          PY
+      - name: Upload rebuilt article package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: article-package-8-1-replay-${{ github.run_number }}
+          path: data/packages/*.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Send individual ZIP to Telegram once
+        run: python deliver_article_package.py
+      - name: Keep package in daily aggregator
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python aggregate_daily_package.py
+      - name: Upload daily ZIP if created
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-package-replay-${{ github.run_number }}
+          path: data/daily_packages/*.zip
+          if-no-files-found: ignore
+          retention-days: 7
