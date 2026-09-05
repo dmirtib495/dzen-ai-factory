@@ -46,9 +46,9 @@ jobs:
         run: |
           {
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-            echo "DEEPSEEK_MODEL=deepseek/deepseek-chat-v3.1:free"
+            echo "DEEPSEEK_MODEL=openrouter/free"
             echo "OPENROUTER_MODEL=openrouter/free"
-            echo "OPENROUTER_EDITOR_MODEL=openai/gpt-oss-120b:free"
+            echo "OPENROUTER_EDITOR_MODEL=openai/gpt-oss-20b:free"
             echo "OPENAI_API_KEY=$OPENAI_API_KEY"
             echo "OPENAI_MODEL=gpt-5-mini"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
@@ -90,6 +90,17 @@ jobs:
       - name: Sync results to Cloudflare D1
         if: always()
         run: python cloud_sync.py
+      - name: Verify latest Cloudflare D1 article
+        if: always()
+        run: |
+          python - <<'PY'
+          from dotenv import load_dotenv
+          load_dotenv('.env')
+          from cloud_sync import query
+          result=query("SELECT id,headline,category,status,quality_ok,created_at FROM articles ORDER BY id DESC LIMIT 1") or {}
+          rows=result.get('results',[])
+          print('d1_latest_article=', rows[0] if rows else None)
+          PY
       - name: Upload generated artifacts
         if: always()
         uses: actions/upload-artifact@v4
