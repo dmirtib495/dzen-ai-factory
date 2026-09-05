@@ -1,4 +1,4 @@
-# acceptance v4: fixed free models + tagged dispatch
+# acceptance v5: verifiable quality + Telegram delivery
 name: Production Acceptance Run
 
 on:
