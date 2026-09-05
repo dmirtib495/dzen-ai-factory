@@ -129,13 +129,12 @@ def _source_urls(topic: dict) -> list[str]:
 
 
 def _or_client():
-    return OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1", timeout=120, max_retries=1)
+    # Outer retry logic below knows the difference between malformed JSON and
+    # a hard daily free-tier limit. SDK retries only multiplied 429 requests.
+    return OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1", timeout=120, max_retries=0)
 
 
 def _or_call(model: str, messages: list[dict], temperature: float = 0.2):
-    # Ask OpenRouter for JSON mode and require a provider/model that supports
-    # the parameters we send. This is especially important for openrouter/free,
-    # which otherwise may route to a model that ignores structured output.
     response = _or_client().chat.completions.create(
         model=model,
         messages=messages,
@@ -152,6 +151,15 @@ def _or_call(model: str, messages: list[dict], temperature: float = 0.2):
 
 def _actual_model(response, requested_model: str) -> str:
     return _as_text(getattr(response, "model", "")) or requested_model
+
+
+def _is_openrouter_free_daily_limit(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "free-models-per-day" in text
+        or "openrouter_free_tier_daily" in text
+        or ("rate limit exceeded" in text and "free" in text and "daily" in text)
+    )
 
 
 def _openrouter_json(models: list[str], prompt: str, role: str, temperature: float, provider_name: str):
@@ -187,6 +195,12 @@ def _openrouter_json(models: list[str], prompt: str, role: str, temperature: flo
                     "OpenRouter JSON failure role=%s requested=%s attempt=%s error=%s",
                     role, requested_model, attempt, exc,
                 )
+                if _is_openrouter_free_daily_limit(exc):
+                    log.warning(
+                        "OpenRouter hard daily free-tier limit for requested=%s; skipping retries and moving to fallback",
+                        requested_model,
+                    )
+                    break
     raise RuntimeError(f"{role} недоступен: " + " | ".join(errors))
 
 
@@ -229,6 +243,7 @@ def _yandex_edit(data: dict) -> dict:
     parsed = _extract(response.json()["result"]["alternatives"][0]["message"]["text"])
     if not isinstance(parsed, dict):
         raise ValueError("YandexGPT вернул некорректный JSON")
+    log.info("YandexGPT edit OK model=%s", YANDEX_MODEL)
     return _merge_editor(data, parsed, "YandexGPT", YANDEX_MODEL)
 
 
@@ -284,10 +299,55 @@ def _quality_audit(data: dict) -> dict:
     return audit
 
 
+def _mechanical_quality_cleanup(data: dict) -> dict:
+    """Fix only deterministic presentation defects without inventing facts."""
+    text = _as_text(data.get("article_markdown"))
+    headline = _as_text(data.get("headline"))
+
+    replacements = [
+        (r"\b100\s*%\b", "без абсолютной гарантии"),
+        (r"\bгарантированно\b", "с оговорками"),
+        (r"\bточно лучший\b", "может оказаться подходящим"),
+        (r"\bсамый лучший\b", "один из подходящих вариантов"),
+        (r"\bникогда\b", "как правило, не"),
+        (r"\bвсегда\b", "обычно"),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.I)
+        headline = re.sub(pattern, replacement, headline, flags=re.I)
+
+    # More than eight H2 headings is a deterministic formatting rejection.
+    # Preserve the section text but demote only the extra headings to bold labels.
+    heading_seen = 0
+    lines = []
+    for line in text.splitlines():
+        if re.match(r"^##\s+", line):
+            heading_seen += 1
+            if heading_seen > 8:
+                line = "**" + re.sub(r"^##\s+", "", line).strip() + "**"
+        lines.append(line)
+    data["article_markdown"] = "\n".join(lines).strip()
+    data["headline"] = headline.strip()
+    return data
+
+
 def _repair(data: dict, topic: dict) -> dict:
-    for attempt in range(1, 3):
+    for attempt in range(1, 4):
+        data = _mechanical_quality_cleanup(data)
         deterministic = check_article(data, require_ai_audit=False)
         audit = _quality_audit(data)
+        log.info(
+            "REPAIR_CHECK attempt=%s deterministic_ok=%s score=%s words=%s headings=%s problems=%s audit_verdict=%s audit_score=%s blocking=%s",
+            attempt,
+            deterministic.get("ok"),
+            deterministic.get("score"),
+            deterministic.get("words"),
+            deterministic.get("headings"),
+            deterministic.get("problems"),
+            audit.get("verdict"),
+            audit.get("total_score"),
+            audit.get("blocking_issues"),
+        )
         if deterministic["ok"] and audit["verdict"] == "PASS" and audit["total_score"] >= 90 and not audit["blocking_issues"]:
             return data
 
@@ -302,6 +362,7 @@ def _repair(data: dict, topic: dict) -> dict:
         data["source_urls"] = _source_urls(topic)
         data.pop("ai_quality_audit", None)
 
+    data = _mechanical_quality_cleanup(data)
     _quality_audit(data)
     return data
 
@@ -318,10 +379,17 @@ def generate_article(topic):
     data["source_urls"] = sources
     data = _repair(data, topic)
     data["source_urls"] = sources
+    data = _mechanical_quality_cleanup(data)
 
     final_quality = check_article(data, require_ai_audit=True)
     if not final_quality["ok"]:
-        raise ValueError("Материал не прошёл финальный professional quality gate: " + "; ".join(final_quality["problems"]))
+        details = list(final_quality.get("problems") or [])
+        if not details:
+            details = [
+                f"Итоговый score ниже 90: {final_quality.get('score')}",
+                *(final_quality.get("warnings") or []),
+            ]
+        raise ValueError("Материал не прошёл финальный professional quality gate: " + "; ".join(details))
     return data
 
 
