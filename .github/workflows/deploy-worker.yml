@@ -1,0 +1,46 @@
+name: Deploy Cloudflare Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.ts'
+      - 'wrangler.jsonc'
+      - '.github/workflows/deploy-worker.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Wrangler
+        run: npm install --no-save wrangler@latest
+      - name: Deploy root Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config wrangler.jsonc
+      - name: Verify deployed root Worker
+        run: |
+          python - <<'PY'
+          import json, time, urllib.request
+          url='https://dzen-auto-control.c4dftyhvv2.workers.dev/health'
+          last=None
+          for _ in range(12):
+              try:
+                  with urllib.request.urlopen(url, timeout=15) as r:
+                      data=json.load(r)
+                  print('health=', json.dumps(data, ensure_ascii=False, sort_keys=True))
+                  if data.get('ok') and 'workflow_trigger_configured' in data and 'd1_configured' in data:
+                      assert data.get('d1_configured') is True
+                      raise SystemExit(0)
+                  last=data
+              except Exception as exc:
+                  last=repr(exc)
+              time.sleep(5)
+          raise SystemExit(f'Root Worker health verification failed: {last}')
+          PY
