@@ -1,0 +1,46 @@
+name: Resend Article 8 Once
+
+on:
+  push:
+    paths:
+      - '.github/workflows/resend-article-8-once.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Download already built article package
+        uses: actions/download-artifact@v4
+        with:
+          name: article-package-8-1-replay-1
+          path: resend-artifact
+          run-id: 33988195898
+          github-token: ${{ github.token }}
+      - name: Force resend ZIP to Telegram
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from telegram_notify import send_document
+          files=list(Path('resend-artifact').rglob('article_8_*.zip'))
+          if len(files) != 1:
+              raise SystemExit(f'Expected exactly one article ZIP, found {files}')
+          path=files[0]
+          mid=send_document(path, caption='📦 Повторная отправка готовой статьи #8. Word с 5 утверждёнными изображениями + 5 JPG в ZIP.')
+          print(f'FORCE_RESEND_OK file={path.name} message_id={mid}')
+          PY
