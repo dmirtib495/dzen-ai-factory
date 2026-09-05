@@ -26,7 +26,7 @@ from editorial_prompts import (
     yandex_editor_prompt,
 )
 from quality_checker import check_article
-from quota import record_success
+from quota import reserve
 
 log = logging.getLogger(__name__)
 
@@ -146,18 +146,19 @@ def _or_client():
 
 
 def _or_call(model: str, messages: list[dict], temperature: float = 0.2):
-    response = _or_client().chat.completions.create(
+    # Reserve before the network call. OpenRouter counts failed free-tier
+    # attempts too, so a 429 must consume the same shared D1 budget as a 200.
+    if not reserve():
+        raise RuntimeError(
+            "openrouter_free_tier_daily: shared D1 daily OpenRouter budget exhausted"
+        )
+    return _or_client().chat.completions.create(
         model=model,
         messages=messages,
         temperature=temperature,
         response_format={"type": "json_object"},
         extra_body={"provider": {"require_parameters": True}},
     )
-    try:
-        record_success()
-    except Exception:
-        log.exception("OpenRouter usage telemetry failed after successful request")
-    return response
 
 
 def _actual_model(response, requested_model: str) -> str:
