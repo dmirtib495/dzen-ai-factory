@@ -121,7 +121,6 @@ def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
         used.add(anchor)
         anchors.append(anchor)
 
-    # Interior image: use an explicit cabin/equipment section when the article has one.
     if count >= 4:
         interior = _heading_index(
             lines,
@@ -130,8 +129,6 @@ def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
         if interior is not None:
             anchors[3] = _nearest_paragraph_at_or_after(paragraphs, interior + 1, set(anchors[:3]))
 
-    # Editorial structure common to buyer guides: image 4 closes the narrative before
-    # a checklist, while image 5 closes the checklist and introduces the conclusion.
     if count >= 4:
         checklist = _heading_index(lines, ("чек-лист", "чеклист", "памятк"))
         if checklist is not None:
@@ -146,8 +143,6 @@ def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
             if before_conclusion is not None and before_conclusion > anchors[3]:
                 anchors[4] = before_conclusion
 
-    # Preserve custom list-item anchors; only repair collisions/order without forcing
-    # them back onto ordinary paragraphs.
     normalized: list[int] = []
     floor = -1
     for anchor in anchors:
@@ -165,7 +160,7 @@ def _add_image(document: Document, image: Path, idx: int, caption: str) -> None:
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(4)
     p.paragraph_format.space_after = Pt(2)
-    p.add_run().add_picture(str(image), width=Inches(4.8))
+    p.add_run().add_picture(str(image), width=Inches(4.55))
 
     text = (caption or "").strip()
     if text:
