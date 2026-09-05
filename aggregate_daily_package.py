@@ -7,7 +7,6 @@ import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -47,6 +46,24 @@ def _set_day_status(day: str, status: str, message_id: int | None = None) -> Non
     )
 
 
+def _find_ready_day() -> str | None:
+    result = query(
+        """
+        SELECT ap.package_day day, COUNT(*) n
+        FROM article_packages ap
+        LEFT JOIN daily_packages dp ON dp.day=ap.package_day
+        WHERE ap.status='ready' AND (dp.day IS NULL OR dp.status='failed')
+        GROUP BY ap.package_day
+        HAVING COUNT(*) >= ?
+        ORDER BY ap.package_day
+        LIMIT 1
+        """,
+        [ARTICLES_PER_DAILY_PACK],
+    ) or {}
+    rows = result.get('results', [])
+    return str(rows[0]['day']) if rows else None
+
+
 def _download_artifact(run_id: str, artifact_name: str, dest: Path) -> None:
     token = os.getenv('GITHUB_TOKEN', '').strip()
     if not token:
@@ -82,7 +99,11 @@ def _find_inner_article_zip(root: Path, article_id: int) -> Path:
 
 def main():
     now = datetime.now(timezone.utc)
-    day = now.astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
+    day = _find_ready_day()
+    if not day:
+        print('DAILY_PACKAGE_WAIT no unsent day has 3 ready article packages')
+        return
+
     result = query(
         """
         SELECT article_id,batch_id,source_run_id,artifact_name
