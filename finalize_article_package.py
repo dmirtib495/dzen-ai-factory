@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from cloud_sync import query
-from document_packager import build_article_package
+from document_packager import MAX_APPROVED_IMAGES, MIN_APPROVED_IMAGES, build_article_package
 
 
 def _find_batch_folder(root: Path, batch_id: int) -> Path:
@@ -66,19 +66,22 @@ def main():
 
     batch_folder = _find_batch_folder(Path(args.source_root), args.batch_id)
     candidates = json.loads(batch.get('candidate_json') or '[]')
-    if len(candidates) != 5:
-        raise SystemExit(f'Approved batch must contain exactly 5 candidates; got {len(candidates)}')
+    if len(candidates) < MIN_APPROVED_IMAGES or len(candidates) > MAX_APPROVED_IMAGES:
+        raise SystemExit(
+            f'Approved batch must contain {MIN_APPROVED_IMAGES}-{MAX_APPROVED_IMAGES} candidates; got {len(candidates)}'
+        )
     images = [batch_folder / str(item['file']) for item in candidates]
     if any(not p.is_file() for p in images):
         raise SystemExit('One or more approved image files are missing from source artifact')
 
+    image_count = len(images)
     folder, docx_path, zip_path = build_article_package(
         article_id=args.article_id,
         headline=str(article.get('headline') or ''),
         article_markdown=str(article.get('article_markdown') or ''),
         approved_images=images,
         output_root='data/packages',
-        captions=[f'Редакционная иллюстрация {i}' for i in range(1, 6)],
+        captions=[f'Редакционная иллюстрация {i}' for i in range(1, image_count + 1)],
     )
 
     now = datetime.now(timezone.utc)
@@ -104,6 +107,7 @@ def main():
         'article_id': args.article_id,
         'batch_id': args.batch_id,
         'package_day': package_day,
+        'image_count': image_count,
         'folder': str(folder),
         'docx': str(docx_path),
         'zip': str(zip_path),
