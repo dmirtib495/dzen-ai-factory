@@ -49,23 +49,38 @@ jobs:
               raise SystemExit('CLOUDFLARE_AI_API_TOKEN is missing')
           if not account:
               raise SystemExit('CLOUDFLARE_ACCOUNT_ID is missing')
-          url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{MODEL}'
+          headers={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
 
+          schema_url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/models/schema'
+          schema_r=requests.get(schema_url,headers={'Authorization':f'Bearer {token}'},params={'model':MODEL},timeout=30)
+          schema_row={'http_status':schema_r.status_code}
+          try:
+              schema_payload=schema_r.json()
+              schema_row['result']=schema_payload.get('result')
+              schema_row['errors']=schema_payload.get('errors')
+          except Exception:
+              schema_row['body']=schema_r.text[:2000]
+          (out/'model_schema.json').write_text(json.dumps(schema_row,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('MODEL_SCHEMA',json.dumps(schema_row,ensure_ascii=False)[:4000])
+
+          url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{MODEL}'
           for i,prompt in enumerate(prompts,1):
               started=time.time()
               row={'provider':'cloudflare','model':MODEL,'attempt':i,'steps':STEPS}
               try:
-                  r=requests.post(
-                      url,
-                      headers={'Authorization':f'Bearer {token}','Content-Type':'application/json'},
-                      json={'prompt':prompt,'steps':STEPS,'seed':1000+i},
-                      timeout=180,
-                  )
+                  r=requests.post(url,headers=headers,json={'prompt':prompt,'steps':STEPS,'seed':1000+i},timeout=180)
                   row['http_status']=r.status_code
                   row['seconds']=round(time.time()-started,2)
                   row['cf_ray']=r.headers.get('cf-ray')
                   row['usage_header_candidates']={k:v for k,v in r.headers.items() if 'usage' in k.lower() or 'neuron' in k.lower()}
-                  r.raise_for_status()
+                  if not r.ok:
+                      try:
+                          err_payload=r.json()
+                          row['response_errors']=err_payload.get('errors')
+                          row['response_messages']=err_payload.get('messages')
+                      except Exception:
+                          row['response_body']=r.text[:1200]
+                      raise RuntimeError(f'Cloudflare HTTP {r.status_code}')
                   payload=r.json()
                   image64=(payload.get('result') or {}).get('image')
                   if not image64:
@@ -77,15 +92,7 @@ jobs:
                   billed_neurons=round(tiles*TILE_NEURONS + STEPS*STEP_NEURONS,2)
                   path=out/f'cloudflare_{i}.jpg'
                   path.write_bytes(raw)
-                  row.update(
-                      ok=True,
-                      bytes=len(raw),
-                      format=im.format,
-                      resolution=[width,height],
-                      tiles_512=tiles,
-                      billed_neurons_from_actual_output=billed_neurons,
-                      api_usage=(payload.get('result') or {}).get('usage') or payload.get('usage'),
-                  )
+                  row.update(ok=True,bytes=len(raw),format=im.format,resolution=[width,height],tiles_512=tiles,billed_neurons_from_actual_output=billed_neurons,api_usage=(payload.get('result') or {}).get('usage') or payload.get('usage'))
               except Exception as e:
                   row.update(ok=False,seconds=round(time.time()-started,2),error=str(e)[:800])
               results.append(row)
