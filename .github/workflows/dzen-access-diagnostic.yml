@@ -13,35 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Test public dzen.guru trend endpoints
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Verify production Dzen trend parser
         run: |
           python - <<'PY'
-          import json, re, requests
-          base='https://dzen.guru'
-          headers={'User-Agent':'Mozilla/5.0','Accept':'application/json','Accept-Language':'ru-RU,ru;q=0.9'}
-          for slug in ['zr.ru','autovybor','avtovodsostazhem','mexvod']:
-              url=f'{base}/api/channels/{slug}/posts?offset=0&limit=12&period=30'
-              r=requests.get(url,headers=headers,timeout=30)
-              print('\nPOSTS',slug,'HTTP',r.status_code,'TYPE',r.headers.get('content-type'),'LEN',len(r.content))
-              try:
-                  data=r.json()
-              except Exception:
-                  print('BODY',r.text[:500]); continue
-              items=data.get('items') or []
-              print('TOTAL',data.get('total'),'ITEMS',len(items))
-              for item in sorted(items,key=lambda x: x.get('views') or 0,reverse=True)[:5]:
-                  print('POST',json.dumps({k:item.get(k) for k in ['title','url','views','reads','likes','comments','type','format','publishedAt','published_at']},ensure_ascii=False))
-
-          # Locate fetchChannels implementation and print its exact API path.
-          page=requests.get(base+'/channels/niche/avto',headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
-          scripts=re.findall(r'<script[^>]+src=["\']([^"\']+)',page,re.I)
-          for src in scripts:
-              if not src.startswith('/_next/static/chunks/'):
-                  continue
-              text=requests.get(base+src,headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
-              if 'fetchChannels' not in text and 'fetchChannelPosts' not in text:
-                  continue
-              print('\nAPI_CHUNK',src,'LEN',len(text))
-              for m in re.finditer(r'/api/channels',text):
-                  print('API_CTX',re.sub(r'\s+',' ',text[max(0,m.start()-700):m.start()+1200])[:1900])
+          from dzen_trends import fetch_top_auto_channels, fetch_auto_trends
+          channels=fetch_top_auto_channels(8)
+          print('TOP_CHANNELS',[(x['slug'],x['title'],x['views30days']) for x in channels])
+          if len(channels) < 5:
+              raise SystemExit(f'Expected at least 5 parsed auto channels, got {len(channels)}')
+          trends=fetch_auto_trends(top_channels=8,posts_per_channel=12,period=30,limit=30)
+          print('TOP_TRENDS',[(x.channel_title,x.views,x.title) for x in trends[:10]])
+          if len(trends) < 10:
+              raise SystemExit(f'Expected at least 10 article trends, got {len(trends)}')
+          if not all(x.url.startswith('https://dzen.ru/a/') for x in trends):
+              raise SystemExit('Non-article URL leaked into trend list')
           PY
