@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import zipfile
@@ -11,13 +12,21 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
 
 
-MIN_APPROVED_IMAGES = 5
+MIN_APPROVED_IMAGES = 3
+MAX_APPROVED_IMAGES = 5
 
 
 def _safe_name(value: str, fallback: str = "article") -> str:
     value = re.sub(r"[^\w\-а-яА-ЯёЁ ]+", "", (value or "").strip(), flags=re.UNICODE)
     value = re.sub(r"\s+", "_", value).strip("_")
     return value[:80] or fallback
+
+
+def _validate_image_count(images: list[Path]) -> None:
+    if len(images) < MIN_APPROVED_IMAGES or len(images) > MAX_APPROVED_IMAGES:
+        raise ValueError(
+            f"Approved image count must be {MIN_APPROVED_IMAGES}-{MAX_APPROVED_IMAGES}; got {len(images)}"
+        )
 
 
 def _add_markdown(document: Document, markdown: str) -> None:
@@ -52,10 +61,7 @@ def build_article_docx(
     captions: Iterable[str] | None = None,
 ) -> Path:
     images = [Path(p) for p in approved_images]
-    if len(images) < MIN_APPROVED_IMAGES:
-        raise ValueError(
-            f"DOCX requires at least {MIN_APPROVED_IMAGES} approved images; got {len(images)}"
-        )
+    _validate_image_count(images)
     missing = [str(p) for p in images if not p.is_file()]
     if missing:
         raise FileNotFoundError("Approved image files missing: " + ", ".join(missing))
@@ -118,10 +124,7 @@ def build_article_package(
     captions: Iterable[str] | None = None,
 ) -> tuple[Path, Path, Path]:
     images = [Path(p) for p in approved_images]
-    if len(images) < MIN_APPROVED_IMAGES:
-        raise ValueError(
-            f"Package requires at least {MIN_APPROVED_IMAGES} approved images; got {len(images)}"
-        )
+    _validate_image_count(images)
 
     root = Path(output_root)
     folder = root / f"article_{article_id}_{_safe_name(headline)}"
@@ -150,6 +153,10 @@ def build_article_package(
 
     (folder / "article.md").write_text(article_markdown or "", encoding="utf-8")
     (folder / "headline.txt").write_text((headline or "").strip(), encoding="utf-8")
+    (folder / "package_manifest.json").write_text(
+        json.dumps({"article_id": int(article_id), "image_count": len(copied)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     zip_path = root / f"{folder.name}.zip"
     zip_path.parent.mkdir(parents=True, exist_ok=True)
