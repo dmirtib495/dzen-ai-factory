@@ -97,6 +97,17 @@ def _find_inner_article_zip(root: Path, article_id: int) -> Path:
     return candidates[0]
 
 
+def _image_count(article_folder: Path) -> int:
+    manifest = article_folder / 'package_manifest.json'
+    if manifest.is_file():
+        try:
+            return int(json.loads(manifest.read_text(encoding='utf-8')).get('image_count', 0))
+        except Exception:
+            pass
+    image_dir = article_folder / 'images'
+    return len([p for p in image_dir.glob('*') if p.is_file()]) if image_dir.is_dir() else 0
+
+
 def main():
     now = datetime.now(timezone.utc)
     day = _find_ready_day()
@@ -129,6 +140,7 @@ def main():
     master = work / f'Dzen_Daily_{day}'
     master.mkdir(parents=True, exist_ok=True)
     current_run = os.getenv('GITHUB_RUN_ID', '').strip()
+    image_counts: list[int] = []
 
     try:
         for pos, row in enumerate(rows, 1):
@@ -147,12 +159,14 @@ def main():
             article_dest.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(inner_zip) as zf:
                 zf.extractall(article_dest)
+            image_counts.append(_image_count(article_dest))
 
         manifest = {
             'day': day,
             'article_ids': article_ids,
             'articles': ARTICLES_PER_DAILY_PACK,
-            'images_per_article': 5,
+            'image_counts': image_counts,
+            'total_images': sum(image_counts),
             'created_at': now.isoformat(),
         }
         (master / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -174,15 +188,17 @@ def main():
                 f'{TELEGRAM_SAFE_ZIP_BYTES / 1024 / 1024:.0f} MB'
             )
 
+        image_text = ', '.join(str(x) for x in image_counts)
         message_id = send_document(
             out,
             caption=(
                 f'📦 Ежедневный пакет Dzen AI Factory за {day}\n'
-                f'3 статьи · по 5 подтверждённых изображений · DOCX + отдельные JPG'
+                f'{ARTICLES_PER_DAILY_PACK} статьи · изображения по статьям: {image_text} · '
+                f'всего {sum(image_counts)} · DOCX + отдельные JPG'
             ),
         )
         _set_day_status(day, 'sent', int(message_id))
-        print(f'DAILY_PACKAGE_SENT day={day} message_id={message_id} path={out}')
+        print(f'DAILY_PACKAGE_SENT day={day} message_id={message_id} images={image_counts} path={out}')
     except Exception:
         _set_day_status(day, 'failed')
         raise
