@@ -83,6 +83,20 @@ CREATE TABLE IF NOT EXISTS article_packages (
 );
 CREATE INDEX IF NOT EXISTS idx_article_packages_day ON article_packages(package_day, status);
 
+-- One row per approved batch prevents concurrent/replayed finalizers from
+-- sending the same individual article ZIP to Telegram more than once.
+CREATE TABLE IF NOT EXISTS article_package_deliveries (
+  article_id INTEGER NOT NULL,
+  batch_id INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  telegram_message_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(article_id, batch_id)
+);
+CREATE INDEX IF NOT EXISTS idx_article_package_deliveries_status
+ON article_package_deliveries(status);
+
 CREATE TABLE IF NOT EXISTS daily_packages (
   day TEXT PRIMARY KEY,
   status TEXT NOT NULL,
