@@ -14,7 +14,7 @@ on:
         description: 'Workflow run containing the image artifact'
         required: true
       artifact_name:
-        description: 'Artifact that contains the five images'
+        description: 'Artifact that contains the approved 3-5 images'
         required: true
 
 permissions:
@@ -66,6 +66,8 @@ jobs:
           path: data/packages/*.zip
           if-no-files-found: error
           retention-days: 7
+      - name: Send individual article ZIP to Telegram once
+        run: python deliver_article_package.py
       - name: Aggregate and send daily package when 3 are ready
         env:
           GITHUB_TOKEN: ${{ github.token }}
