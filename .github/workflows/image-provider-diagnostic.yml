@@ -12,7 +12,7 @@ permissions:
 jobs:
   test-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -26,22 +26,29 @@ jobs:
       - name: Run real Cloudflare Workers AI tests
         run: |
           python - <<'PY'
-          import base64, io, json, math, os, time
+          import base64, io, json, os, time
           from pathlib import Path
           import requests
           from PIL import Image
 
           MODEL='@cf/black-forest-labs/flux-1-schnell'
           STEPS=4
-          TILE_NEURONS=4.80
-          STEP_NEURONS=9.60
           out=Path('image_diagnostic')
           out.mkdir(exist_ok=True)
           results=[]
-          prompts=[
-              'photorealistic editorial automotive photo of a black Toyota Crown 2017 parked on a clean European city street, natural daylight, realistic proportions, no text, no watermark',
-              'photorealistic editorial automotive photo of a silver Audi sedan driving on a mountain road, natural daylight, realistic wheels and body proportions, no text, no watermark',
-              'photorealistic editorial automotive photo of a white Tesla Model 3 parked near modern architecture, overcast daylight, realistic reflections, no text, no watermark',
+          cases=[
+              ('bmw_5_2021','photorealistic editorial automotive photo of a 2021 BMW 5 Series G30 sedan, front three-quarter view, parked on a modern European boulevard, natural daylight, factory body proportions, correct kidney grille and headlights, no text, no watermark'),
+              ('mercedes_e_2021','photorealistic editorial automotive photo of a 2021 Mercedes-Benz E-Class W213 sedan, front three-quarter view, parked outside a business district, natural daylight, factory body proportions, correct grille and headlights, no text, no watermark'),
+              ('lexus_es_2021','photorealistic editorial automotive photo of a 2021 Lexus ES sedan, front three-quarter view, parked near contemporary architecture, natural daylight, factory body proportions, correct spindle grille and headlights, no text, no watermark'),
+              ('volvo_s90_2021','photorealistic editorial automotive photo of a 2021 Volvo S90 sedan, front three-quarter view, Scandinavian city street, overcast daylight, factory body proportions, correct Thor hammer headlights, no text, no watermark'),
+              ('porsche_taycan_2022','photorealistic editorial automotive photo of a 2022 Porsche Taycan, front three-quarter view, parked at an EV charging area, natural daylight, factory body proportions, correct low nose and headlights, no text, no watermark'),
+              ('honda_accord_2021','photorealistic editorial automotive photo of a 2021 Honda Accord sedan, front three-quarter view, suburban city road, natural daylight, factory body proportions, correct grille and headlights, no text, no watermark'),
+              ('mazda6_2021','photorealistic editorial automotive photo of a 2021 Mazda 6 sedan, front three-quarter view, parked on a clean urban street, golden-hour natural light, factory body proportions, correct grille and headlights, no text, no watermark'),
+              ('kia_stinger_2021','photorealistic editorial automotive photo of a 2021 Kia Stinger fastback, front three-quarter view, mountain overlook road, natural daylight, factory body proportions, correct grille and headlights, no text, no watermark'),
+              ('ford_mustang_2021','photorealistic editorial automotive photo of a 2021 Ford Mustang coupe, front three-quarter view, parked near an open desert highway, natural daylight, factory body proportions, correct grille and headlights, no text, no watermark'),
+              ('hyundai_ioniq5_2022','photorealistic editorial automotive photo of a 2022 Hyundai Ioniq 5, front three-quarter view, modern city charging station, natural daylight, factory pixel-light styling and body proportions, no text, no watermark'),
+              ('nissan_gtr_2020','photorealistic editorial automotive photo of a 2020 Nissan GT-R R35, front three-quarter view, parked in a clean underground parking area, realistic fluorescent lighting, factory body proportions, correct grille and headlights, no text, no watermark'),
+              ('skoda_octavia_2021','photorealistic editorial automotive photo of a 2021 Skoda Octavia liftback, front three-quarter view, parked on a residential European street, natural daylight, factory body proportions, correct grille and headlights, no text, no watermark'),
           ]
           token=os.getenv('CLOUDFLARE_AI_API_TOKEN','').strip()
           account=os.getenv('CLOUDFLARE_ACCOUNT_ID','').strip()
@@ -50,29 +57,17 @@ jobs:
           if not account:
               raise SystemExit('CLOUDFLARE_ACCOUNT_ID is missing')
           headers={'Authorization':f'Bearer {token}','Content-Type':'application/json'}
-
-          schema_url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/models/schema'
-          schema_r=requests.get(schema_url,headers={'Authorization':f'Bearer {token}'},params={'model':MODEL},timeout=30)
-          schema_row={'http_status':schema_r.status_code}
-          try:
-              schema_payload=schema_r.json()
-              schema_row['result']=schema_payload.get('result')
-              schema_row['errors']=schema_payload.get('errors')
-          except Exception:
-              schema_row['body']=schema_r.text[:2000]
-          (out/'model_schema.json').write_text(json.dumps(schema_row,ensure_ascii=False,indent=2),encoding='utf-8')
-          print('MODEL_SCHEMA',json.dumps(schema_row,ensure_ascii=False)[:4000])
-
           url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{MODEL}'
-          for i,prompt in enumerate(prompts,1):
+
+          for i,(case_id,prompt) in enumerate(cases,1):
               started=time.time()
-              row={'provider':'cloudflare','model':MODEL,'attempt':i,'steps':STEPS}
+              row={'provider':'cloudflare','model':MODEL,'attempt':i,'case_id':case_id,'steps':STEPS,'prompt':prompt}
               try:
                   r=requests.post(url,headers=headers,json={'prompt':prompt,'steps':STEPS},timeout=180)
                   row['http_status']=r.status_code
                   row['seconds']=round(time.time()-started,2)
                   row['cf_ray']=r.headers.get('cf-ray')
-                  row['usage_header_candidates']={k:v for k,v in r.headers.items() if 'usage' in k.lower() or 'neuron' in k.lower()}
+                  row['cf_ai_neurons']=r.headers.get('cf-ai-neurons')
                   if not r.ok:
                       try:
                           err_payload=r.json()
@@ -88,11 +83,9 @@ jobs:
                   raw=base64.b64decode(image64)
                   im=Image.open(io.BytesIO(raw)); im.load()
                   width,height=im.size
-                  tiles=math.ceil(width/512)*math.ceil(height/512)
-                  billed_neurons=round(tiles*TILE_NEURONS + STEPS*STEP_NEURONS,2)
-                  path=out/f'cloudflare_{i}.jpg'
+                  path=out/f'{i:02d}_{case_id}.jpg'
                   path.write_bytes(raw)
-                  row.update(ok=True,bytes=len(raw),format=im.format,resolution=[width,height],tiles_512=tiles,billed_neurons_from_actual_output=billed_neurons,api_usage=(payload.get('result') or {}).get('usage') or payload.get('usage'))
+                  row.update(ok=True,bytes=len(raw),format=im.format,resolution=[width,height],api_usage=(payload.get('result') or {}).get('usage') or payload.get('usage'),file=path.name)
               except Exception as e:
                   row.update(ok=False,seconds=round(time.time()-started,2),error=str(e)[:800])
               results.append(row)
@@ -106,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: image-provider-diagnostic
+          name: image-provider-diagnostic-12
           path: image_diagnostic/
           if-no-files-found: warn
           retention-days: 7
