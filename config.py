@@ -18,8 +18,10 @@ DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'google/gemma-4-31b-it:free').strip
 # Prefer a larger concrete free model for editing/audit/repair. The workflow
 # preflight verifies this slug is still free before production generation.
 OPENROUTER_EDITOR_MODEL = os.getenv('OPENROUTER_EDITOR_MODEL', 'nvidia/nemotron-3-super-120b-a12b:free').strip()
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '').strip()
-OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5-mini').strip()
+# Paid OpenAI is intentionally disabled project-wide. Keep compatibility names
+# because ai_writer.py still imports them, but never read an environment key.
+OPENAI_API_KEY = ''
+OPENAI_MODEL = ''
 YANDEX_API_KEY = os.getenv('YANDEX_API_KEY', '').strip()
 YANDEX_FOLDER_ID = os.getenv('YANDEX_FOLDER_ID', '').strip()
 YANDEX_MODEL = os.getenv('YANDEX_MODEL', 'yandexgpt/latest').strip()
