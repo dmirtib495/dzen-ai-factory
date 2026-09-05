@@ -41,7 +41,6 @@ jobs:
       - name: Create environment file
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
           YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -56,8 +55,6 @@ jobs:
             echo "DEEPSEEK_MODEL=google/gemma-4-31b-it:free"
             echo "OPENROUTER_MODEL=openrouter/free"
             echo "OPENROUTER_EDITOR_MODEL=nvidia/nemotron-3-super-120b-a12b:free"
-            echo "OPENAI_API_KEY=$OPENAI_API_KEY"
-            echo "OPENAI_MODEL=gpt-5-mini"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
             echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
             echo "YANDEX_MODEL=yandexgpt/latest"
@@ -117,9 +114,28 @@ jobs:
           PY
       - name: Initialize Cloudflare D1
         run: python cloud/init_d1.py
+      - name: Shared daily quota preflight
+        id: quota
+        run: |
+          python - <<'PY'
+          import os
+          from quota import status as text_status
+          from image_quota import status as image_status, FLUX_SCHNELL_NEURONS_PER_IMAGE
+          t=text_status(); i=image_status()
+          print('TEXT_QUOTA', t)
+          print('IMAGE_QUOTA', i)
+          can_run = (
+              int(t.get('remaining', 0)) >= 10 and
+              float(i.get('remaining', 0)) + 1e-6 >= 3 * FLUX_SCHNELL_NEURONS_PER_IMAGE
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write(f"can_run={'true' if can_run else 'false'}\n")
+          print('PRODUCTION_QUOTA_OK' if can_run else 'PRODUCTION_SKIPPED_BY_SHARED_DAILY_QUOTA')
+          PY
       - name: Sync cloud database
         run: python cloud_sync.py
       - name: Generate article and review image set
+        if: steps.quota.outputs.can_run == 'true'
         run: python main.py --once
       - name: Sync results to Cloudflare D1
         if: always()
