@@ -49,5 +49,6 @@ def validate():
     if ARTICLES_PER_DAY * 5 > OPENROUTER_DAILY_LIMIT: errors.append('OPENROUTER_DAILY_LIMIT мал для основной AI-цепочки и ремонта качества')
     if MIN_ARTICLE_WORDS >= MAX_ARTICLE_WORDS: errors.append('MIN_ARTICLE_WORDS должен быть меньше MAX_ARTICLE_WORDS')
     if not SCHEDULE_HOURS: errors.append('SCHEDULE_HOURS пуст')
-    if bool(YANDEX_API_KEY) != bool(YANDEX_FOLDER_ID): errors.append('Для Yandex AI нужны одновременно YANDEX_API_KEY и YANDEX_FOLDER_ID')
+    if not (YANDEX_API_KEY and YANDEX_FOLDER_ID):
+        errors.append('YANDEX_API_KEY и YANDEX_FOLDER_ID обязательны: YandexGPT используется как обязательный редакционный этап')
     return errors
