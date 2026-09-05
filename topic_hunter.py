@@ -13,6 +13,7 @@ AUTO_WORDS=['автомобиль','авто','машин','кроссовер',
 NEWS_ONLY=['скандал','авар','катастроф','жертв','политик','войн','криминал']
 XML_PREDEFINED={'amp','lt','gt','quot','apos'}
 ENTITY_RE=re.compile(r'&([A-Za-z][A-Za-z0-9]+);')
+XML_ENCODING_RE=re.compile(r'(<\?xml[^>]*\bencoding=["\'])[^"\']+(["\'])', re.I)
 
 
 def clean(s):
@@ -21,12 +22,7 @@ def clean(s):
 
 
 def _xml_safe_named_entities(text: str) -> str:
-    """Convert HTML named entities that are illegal in XML RSS to numeric refs.
-
-    XML only defines amp/lt/gt/quot/apos. Drom reviews.rss currently contains
-    entities such as &laquo;, which make strict XML parsers fail even though
-    feedparser can recover. Numeric character references remain XML-valid.
-    """
+    """Convert HTML named entities that are illegal in XML RSS to numeric refs."""
     def repl(match):
         name=match.group(1)
         if name in XML_PREDEFINED:
@@ -36,17 +32,31 @@ def _xml_safe_named_entities(text: str) -> str:
     return ENTITY_RE.sub(repl,text)
 
 
-def _parse_feed(url: str):
-    """Fetch RSS explicitly, sanitize invalid HTML entities, then parse.
+def _sanitized_xml_bytes(response) -> bytes:
+    """Return valid UTF-8 XML bytes after repairing illegal HTML entities.
 
-    Falls back to feedparser's own URL fetch only if HTTP retrieval itself
-    fails, so a temporary source/network issue does not crash topic discovery.
+    Some Drom RSS documents declare windows-1251 while requests decodes the
+    response to Unicode. Passing that Unicode back to feedparser with the old
+    declaration produces CharacterEncodingOverride/bozo even after the entity
+    error is fixed. We therefore decode once, repair entities, rewrite the XML
+    declaration to UTF-8, and pass matching UTF-8 bytes to the parser.
     """
+    encoding=(response.encoding or 'windows-1251').strip() or 'windows-1251'
+    try:
+        text=response.content.decode(encoding, errors='strict')
+    except (LookupError, UnicodeDecodeError):
+        text=response.content.decode('windows-1251', errors='replace')
+    text=_xml_safe_named_entities(text)
+    text=XML_ENCODING_RE.sub(r'\1utf-8\2', text, count=1)
+    return text.encode('utf-8')
+
+
+def _parse_feed(url: str):
+    """Fetch RSS explicitly, repair invalid entities/encoding, then parse."""
     try:
         response=requests.get(url,timeout=30,headers={'User-Agent':'dzen-ai-factory/1.0'})
         response.raise_for_status()
-        sanitized=_xml_safe_named_entities(response.text)
-        return feedparser.parse(sanitized)
+        return feedparser.parse(_sanitized_xml_bytes(response))
     except Exception:
         return feedparser.parse(url)
 
