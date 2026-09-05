@@ -52,7 +52,6 @@ def _add_markdown_line(document: Document, raw: str) -> None:
 
 
 def _content_lines(markdown: str) -> list[str]:
-    """Collapse repeated blanks while retaining headings/list items as layout blocks."""
     out: list[str] = []
     blank = False
     for raw in (markdown or "").splitlines():
@@ -87,67 +86,81 @@ def _nearest_paragraph_at_or_after(paragraphs: list[int], target: int, used: set
     return target
 
 
-def _last_paragraph_before(paragraphs: list[int], heading_index: int) -> int | None:
-    candidates = [p for p in paragraphs if p < heading_index]
-    return candidates[-1] if candidates else None
+def _last_content_before(lines: list[str], heading_index: int) -> int | None:
+    for idx in range(heading_index - 1, -1, -1):
+        if lines[idx].strip():
+            return idx
+    return None
+
+
+def _heading_index(lines: list[str], keywords: tuple[str, ...]) -> int | None:
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if line.startswith(("## ", "### ")) and any(k in low for k in keywords):
+            return i
+    return None
 
 
 def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
-    """Choose editorial reading-flow anchors instead of appending illustrations at the end."""
+    """Choose editorial anchors while preserving image order around checklists/conclusions."""
     paragraphs = _paragraph_indices(lines)
     if not paragraphs:
         return [max(0, len(lines) - 1)] * count
 
+    last = paragraphs[-1]
     ratios_by_count = {
         3: (0.05, 0.50, 0.82),
         4: (0.05, 0.34, 0.62, 0.84),
-        5: (0.05, 0.31, 0.52, 0.72, 0.88),
+        5: (0.05, 0.31, 0.52, 0.70, 0.88),
     }
-    ratios = ratios_by_count[count]
-    used: set[int] = set()
     anchors: list[int] = []
-    last = paragraphs[-1]
-
-    for pos, ratio in enumerate(ratios):
+    used: set[int] = set()
+    for pos, ratio in enumerate(ratios_by_count[count]):
         target = paragraphs[0] if pos == 0 else round(last * ratio)
         anchor = _nearest_paragraph_at_or_after(paragraphs, target, used)
         used.add(anchor)
         anchors.append(anchor)
 
+    # Interior image: use an explicit cabin/equipment section when the article has one.
     if count >= 4:
-        interior_keywords = (
-            "салон", "интерьер", "оснащ", "комплектац", "эргоном", "мультимед", "оборудован"
+        interior = _heading_index(
+            lines,
+            ("салон", "интерьер", "оснащ", "комплектац", "эргоном", "мультимед", "оборудован"),
         )
-        for i, line in enumerate(lines):
-            low = line.lower()
-            if line.startswith(("## ", "### ")) and any(k in low for k in interior_keywords):
-                anchors[3] = _nearest_paragraph_at_or_after(paragraphs, i + 1, set(anchors[:3]))
-                break
+        if interior is not None:
+            anchors[3] = _nearest_paragraph_at_or_after(paragraphs, interior + 1, set(anchors[:3]))
+
+    # Editorial structure common to buyer guides: image 4 closes the narrative before
+    # a checklist, while image 5 closes the checklist and introduces the conclusion.
+    if count >= 4:
+        checklist = _heading_index(lines, ("чек-лист", "чеклист", "памятк"))
+        if checklist is not None:
+            before_checklist = _last_content_before(lines, checklist)
+            if before_checklist is not None and before_checklist > anchors[2]:
+                anchors[3] = before_checklist
 
     if count >= 5:
-        conclusion_keywords = ("итог", "вывод", "вердикт", "заключ")
-        for i, line in enumerate(lines):
-            low = line.lower()
-            if line.startswith(("## ", "### ")) and any(k in low for k in conclusion_keywords):
-                before = _last_paragraph_before(paragraphs, i)
-                if before is not None:
-                    anchors[4] = before
-                break
+        conclusion = _heading_index(lines, ("итог", "вывод", "вердикт", "заключ"))
+        if conclusion is not None:
+            before_conclusion = _last_content_before(lines, conclusion)
+            if before_conclusion is not None and before_conclusion > anchors[3]:
+                anchors[4] = before_conclusion
 
+    # Preserve custom list-item anchors; only repair collisions/order without forcing
+    # them back onto ordinary paragraphs.
     normalized: list[int] = []
     floor = -1
     for anchor in anchors:
-        candidates = [p for p in paragraphs if p > floor and p >= anchor]
-        if not candidates:
-            candidates = [p for p in paragraphs if p > floor]
-        chosen = candidates[0] if candidates else max(floor, anchor)
+        chosen = anchor
+        if chosen <= floor:
+            later = [p for p in paragraphs if p > floor]
+            chosen = later[0] if later else floor + 1
         normalized.append(chosen)
         floor = chosen
     return normalized
 
 
 def _add_image(document: Document, image: Path, idx: int, caption: str) -> None:
-    # Compact editorial width keeps text and illustrations together instead of creating image-only pages.
     p = document.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(4)
