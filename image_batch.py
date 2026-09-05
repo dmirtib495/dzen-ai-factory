@@ -7,10 +7,11 @@ from pathlib import Path
 
 from cloud_sync import query
 from image_generator import editorial_prompts, generate_cloudflare_image, make_contact_sheet
-from image_quota import FLUX_SCHNELL_NEURONS_PER_IMAGE, reserve_neurons
+from image_quota import FLUX_SCHNELL_NEURONS_PER_IMAGE, reserve_neurons, status as image_quota_status
 from telegram_notify import notify_image_set
 
-IMAGES_PER_SET = 5
+TARGET_IMAGES_PER_SET = 5
+MIN_IMAGES_PER_SET = 3
 BATCH_ROOT = Path('data/image_batches')
 
 
@@ -52,27 +53,42 @@ def _update_batch(batch_id: int, *, status: str, candidate_json: str | None = No
         )
 
 
-def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str = 'dzen-factory') -> dict:
-    """Generate exactly five candidates, persist batch state, and send one preview.
+def _reserve_adaptive_set() -> int:
+    """Reserve the largest affordable set between 3 and 5 images.
 
-    The full set's neuron cost is atomically reserved before the first inference,
-    so concurrent article/regeneration workflows cannot create a partial set by
-    racing for the last daily neurons.
+    The first status read is advisory only. The actual reservation remains
+    atomic in D1; if another workflow wins the race, retry with a smaller set.
     """
+    quota = image_quota_status()
+    remaining = float(quota.get('remaining', 0.0) or 0.0)
+    affordable = int(remaining // FLUX_SCHNELL_NEURONS_PER_IMAGE)
+    start = min(TARGET_IMAGES_PER_SET, affordable)
+    for count in range(start, MIN_IMAGES_PER_SET - 1, -1):
+        if reserve_neurons(FLUX_SCHNELL_NEURONS_PER_IMAGE * count):
+            return count
+    raise RuntimeError(
+        f'Недостаточно общего дневного Workers AI бюджета даже для минимального набора '
+        f'из {MIN_IMAGES_PER_SET} изображений'
+    )
+
+
+def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str = 'dzen-factory') -> dict:
+    """Generate a quota-aware 3-5 image set, persist it, and send one preview."""
     run_id = os.getenv('GITHUB_RUN_ID', '').strip() or 'local'
     run_number = os.getenv('GITHUB_RUN_NUMBER', '').strip() or run_id
     artifact_name = f'{artifact_prefix}-{run_number}'
     attempt = _next_attempt(article_id)
     batch_id = _insert_batch(article_id, attempt, run_id, artifact_name)
 
-    total_reservation = FLUX_SCHNELL_NEURONS_PER_IMAGE * IMAGES_PER_SET
-    if not reserve_neurons(total_reservation):
+    try:
+        image_count = _reserve_adaptive_set()
+    except Exception:
         _update_batch(batch_id, status='quota_blocked')
-        raise RuntimeError('Недостаточно общего дневного Workers AI бюджета для нового набора из 5 изображений')
+        raise
 
     folder = BATCH_ROOT / f'batch_{batch_id}'
     folder.mkdir(parents=True, exist_ok=True)
-    prompts = editorial_prompts(headline)
+    prompts = editorial_prompts(headline, image_count)
     candidates = []
 
     try:
@@ -99,6 +115,7 @@ def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str =
             'headline': headline,
             'source_run_id': run_id,
             'artifact_name': artifact_name,
+            'image_count': image_count,
             'images': candidates,
             'preview': contact.name,
         }
@@ -112,6 +129,7 @@ def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str =
             headline=headline,
             batch_id=batch_id,
             attempt=attempt,
+            image_count=image_count,
         )
         if not message_id:
             raise RuntimeError('Telegram не подтвердил доставку превью набора изображений')
