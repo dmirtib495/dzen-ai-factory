@@ -1,0 +1,45 @@
+name: Dzen Access Diagnostic
+
+on:
+  push:
+    paths:
+      - '.github/workflows/dzen-access-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe Dzen public pages
+        run: |
+          python - <<'PY'
+          import re, requests
+          urls = [
+            'https://dzen.ru/id/6a9c1d1bebddce11ab50c3eb',
+            'https://dzen.ru/a/apw74QQUCWULo9ZW',
+            'https://dzen.ru/a/apwv0U99AWXiJuIx',
+          ]
+          headers={
+            'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
+            'Accept-Language':'ru-RU,ru;q=0.9,en;q=0.5',
+          }
+          keys = ['views','viewCount','subscribers','subscribersCount','publication','article','title']
+          for url in urls:
+            try:
+              r=requests.get(url,headers=headers,timeout=30,allow_redirects=True)
+              text=r.text
+              print('URL',url)
+              print('STATUS',r.status_code,'FINAL',r.url,'LEN',len(text),'TYPE',r.headers.get('content-type'))
+              title=re.search(r'<title[^>]*>(.*?)</title>',text,re.I|re.S)
+              print('TITLE', re.sub(r'\s+',' ',title.group(1)).strip()[:300] if title else None)
+              for key in keys:
+                print('KEY',key,'COUNT',text.lower().count(key.lower()))
+              for pat in [r'"views?"\s*:\s*([0-9]+)',r'"viewCount"\s*:\s*([0-9]+)',r'"subscribersCount"\s*:\s*([0-9]+)']:
+                vals=re.findall(pat,text,re.I)
+                if vals: print('MATCH',pat,vals[:20])
+            except Exception as e:
+              print('ERROR',url,repr(e))
+          PY
