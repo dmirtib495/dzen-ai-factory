@@ -5,6 +5,7 @@ from analytics import learn_strategy, recommended_categories
 from backup import backup_db
 from config import ARTICLES_PER_DAY
 from db import add_article, add_title_candidates, update_topic_status
+from image_batch import generate_image_set
 from image_generator import make_cover
 from publisher import save_to_queue
 from quality_checker import check_article
@@ -95,12 +96,16 @@ def generate_batch():
                     log.warning("Rejected after professional gate: %s: %s", chosen, quality["problems"])
                     continue
 
+                # Keep the local cover only for the legacy publication queue.
+                # The final DOCX package uses the five user-approved FLUX images.
                 image = make_cover(chosen, data.get("category", "Авто"))
                 path = save_to_queue(data, image)
                 aid = add_article(topic["id"], chosen, path, True, "", data.get("category", ""), image, "queued")
                 add_title_candidates(aid, candidates, chosen)
                 update_topic_status(topic["id"], "used")
-                _safe("sync_local", sync_local)
+                sync_result = _safe("sync_local", sync_local)
+                if sync_result is None:
+                    raise RuntimeError("Не удалось синхронизировать принятую статью в D1 перед генерацией изображений")
 
                 stages = data.get("ai_stages", [])
                 stage_text = " → ".join(_text(x) for x in stages if _text(x))
@@ -111,14 +116,30 @@ def generate_batch():
                     f"Категория: {data.get('category', '')}\nПроверка: ✅ PROFESSIONAL PASS\n"
                     f"Quality gate: {quality['score']}/100\nНезависимый AI-аудит: {audit_score}/100\n"
                     f"Слов: {quality['words']}\nПодзаголовков: {quality.get('headings', '—')}\n"
-                    f"AI-цепочка: {stage_text}\nИсточников: {len(data.get('source_urls', []))}\nID: {aid}"
+                    f"AI-цепочка: {stage_text}\nИсточников: {len(data.get('source_urls', []))}\nID: {aid}\n\n"
+                    "После текста придёт одно превью из 5 изображений для пакетного подтверждения."
                 )
                 message_ids = notify_article(header, data.get("article_markdown", ""))
                 if not message_ids:
                     raise RuntimeError("Telegram не подтвердил доставку статьи")
+
+                image_manifest = _safe(
+                    "generate_image_set",
+                    generate_image_set,
+                    aid,
+                    chosen,
+                    artifact_prefix="dzen-factory",
+                )
+                if not image_manifest:
+                    notify(
+                        f"⚠️ Статья #{aid} прошла quality gate, но набор изображений сейчас не создан. "
+                        "Текст сохранён; изображения можно повторить после восстановления/сброса дневного бюджета."
+                    )
+
                 log.info(
-                    "ARTICLE_ACCEPTED id=%s headline=%r quality_score=%s ai_audit_score=%s telegram_message_ids=%s path=%s",
-                    aid, chosen, quality.get("score"), audit_score, message_ids, path,
+                    "ARTICLE_ACCEPTED id=%s headline=%r quality_score=%s ai_audit_score=%s telegram_message_ids=%s image_batch=%s path=%s",
+                    aid, chosen, quality.get("score"), audit_score, message_ids,
+                    image_manifest.get('batch_id') if image_manifest else None, path,
                 )
                 made += 1
             except Exception as exc:
