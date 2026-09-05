@@ -264,7 +264,7 @@ async function triggerGeneration(env: Env) {
         "User-Agent": "dzen-auto-control-worker",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ ref: "main" }),
+      body: JSON.stringify({ ref: "main", inputs: { trigger_source: "telegram-worker" } }),
     }
   );
 
