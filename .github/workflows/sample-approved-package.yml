@@ -1,0 +1,109 @@
+name: Rebuild Approved Sample Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sample-approved-package.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      GITHUB_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Resolve approved batch artifact from D1
+        id: source
+        run: |
+          python - <<'PY'
+          import os
+          from cloud_sync import query
+          r=query("SELECT source_run_id,artifact_name,status,candidate_json FROM image_batches WHERE id=1 AND article_id=8") or {}
+          rows=r.get('results',[])
+          if not rows:
+              raise SystemExit('Approved sample batch #1 for article #8 not found')
+          row=rows[0]
+          if row.get('status') != 'approved':
+              raise SystemExit(f"Batch #1 is not approved: {row.get('status')}")
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f:
+              f.write(f"run_id={row['source_run_id']}\n")
+              f.write(f"artifact_name={row['artifact_name']}\n")
+          print('SOURCE_RUN', row['source_run_id'])
+          print('SOURCE_ARTIFACT', row['artifact_name'])
+          print('CANDIDATES', row['candidate_json'])
+          PY
+      - name: Download original approved image artifact
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_ARTIFACT_NAME: ${{ steps.source.outputs.artifact_name }}
+        run: |
+          python - <<'PY'
+          import io, os, zipfile, requests
+          repo='dmirtib495/dzen-ai-factory'
+          headers={
+              'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
+              'Accept':'application/vnd.github+json',
+              'X-GitHub-Api-Version':'2022-11-28',
+          }
+          run_id=os.environ['SOURCE_RUN_ID']
+          name=os.environ['SOURCE_ARTIFACT_NAME']
+          r=requests.get(f'https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts',headers=headers,timeout=30)
+          r.raise_for_status()
+          artifacts=r.json().get('artifacts',[])
+          a=next((x for x in artifacts if x.get('name')==name and not x.get('expired')),None)
+          if not a:
+              raise SystemExit(f'Artifact {name!r} not found or expired on run {run_id}')
+          z=requests.get(a['archive_download_url'],headers=headers,timeout=120)
+          z.raise_for_status()
+          os.makedirs('source-artifact',exist_ok=True)
+          with zipfile.ZipFile(io.BytesIO(z.content)) as f:
+              f.extractall('source-artifact')
+          print('DOWNLOADED_ARTIFACT_ID',a['id'],'SIZE',a.get('size_in_bytes'))
+          PY
+      - name: Rebuild Word and ZIP without Telegram send
+        run: python finalize_article_package.py --article-id 8 --batch-id 1 --source-root source-artifact
+      - name: Verify package structure
+        run: |
+          python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          p=json.loads(Path('data/current_package.json').read_text(encoding='utf-8'))
+          assert p['image_count']==5, p
+          z=Path(p['zip']); d=Path(p['docx'])
+          assert z.is_file() and z.stat().st_size>0
+          assert d.is_file() and d.stat().st_size>0
+          with zipfile.ZipFile(z) as f:
+              names=f.namelist()
+          jpgs=[n for n in names if n.startswith('images/')]
+          assert len(jpgs)==5, names
+          assert 'article.docx' in names
+          print('SAMPLE_PACKAGE_OK',p)
+          print('ZIP_FILES',names)
+          PY
+      - name: Upload rebuilt sample for QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: approved-sample-article-8-batch-1
+          path: |
+            data/packages/
+            data/current_package.json
+          retention-days: 7
