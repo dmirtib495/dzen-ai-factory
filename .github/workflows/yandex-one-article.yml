@@ -1,0 +1,76 @@
+name: Yandex One Article
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/yandex-one-article.yml'
+permissions:
+  contents: read
+jobs:
+  article:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+      YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Generate, independently audit and deliver one Yandex-only article
+        run: |
+          python - <<'PY'
+          import json, os, re, requests, time
+          API=os.environ['YANDEX_API_KEY']; FOLDER=os.environ['YANDEX_FOLDER_ID']
+          TG=os.environ['TELEGRAM_BOT_TOKEN']; CHAT=os.environ['TELEGRAM_CHAT_ID']
+          URL='https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
+          source_url='https://www.drom.ru/reviews/toyota/crown/1444413/'
+          source='''Отзыв владельца Toyota Crown 2017. В карточке указаны: бензиновый двигатель 2.5 л, 178 л.с., вариатор, задний привод, правый руль, седан, 14 поколение рестайлинг, пробег 200 000 км на момент карточки. Владелец пишет, что купил автомобиль в 2023 году, до этого праворульными машинами не интересовался. Отмечает мягкость и комфорт, непривычность правого руля, низкий клиренс с нештатным обвесом, ограниченное по его ощущениям место сзади и потенциально сложную ликвидность. Сообщает о примерно 50 тыс. км собственного пробега за три года и только регламентном обслуживании; это личный опыт одного владельца, не статистика надёжности. Указанные владельцем значения расхода и любые цены не переносить в статью как универсальные факты.'''
+          schema='''Верни ТОЛЬКО JSON: {"headline":str,"headlines":[ровно 5 строк],"category":str,"article_markdown":str,"fact_check":[3-6 строк],"source_urls":[str],"image_prompt":str,"commercial_intent":int}.'''
+          standards='''Редакция «Авто без переплаты». 900–1400 русских слов. Лид 2–3 абзаца; 5–8 разделов ##; минимум три связки признак/ситуация → почему важно → что проверить → какой риск/расход предотвращает; отдельный практический чек-лист; раздел «Где можно ошибиться или переплатить»; конкретный вывод. Ровно 5 разных честных заголовков 45–90 знаков: практический, риск/ошибка, экономический, вопрос, выбор/сравнение; headline — лучший. Без кликбейта, абсолютов «всегда/никогда/100%», выдуманных цен, статистики, законов и характеристик. Отделяй личный опыт владельца от общего вывода. Не добавляй факты, которых нет во входе. Естественный русский язык, без SEO-воды и шаблонов ИИ.'''
+          def call(system,prompt,temp=.25):
+              r=requests.post(URL,headers={'Authorization':'Api-Key '+API,'Content-Type':'application/json'},json={'modelUri':f'gpt://{FOLDER}/yandexgpt/latest','completionOptions':{'stream':False,'temperature':temp,'maxTokens':'8000'},'messages':[{'role':'system','text':system},{'role':'user','text':prompt}]},timeout=180)
+              print('YANDEX_HTTP',r.status_code); r.raise_for_status()
+              return r.json()['result']['alternatives'][0]['message']['text']
+          def obj(text):
+              text=text.strip(); text=re.sub(r'^```(?:json)?\s*|\s*```$','',text,flags=re.I|re.S)
+              return json.loads(text)
+          draft=obj(call('Ты ведущий автомобильный журналист. Соблюдай фактическую дисциплину.',standards+'\n\nИСТОЧНИК:\n'+source+'\nURL: '+source_url+'\n'+schema))
+          print('DRAFT_OK',draft['headline'])
+          edited=obj(call('Ты строгий выпускающий редактор. Не добавляй новых фактов. Перепиши материал так, чтобы он был готов к публикации.',standards+'\nПроверь и улучши этот материал:\n'+json.dumps(draft,ensure_ascii=False)+'\n'+schema,.15))
+          print('EDIT_OK',edited['headline'])
+          audit_prompt='''Ты НЕ участвовал в написании текста. Ты независимый руководитель контроля качества. Не защищай предыдущую редактуру. Оцени только предъявленный материал по фактической безопасности, пользе, структуре, языку, отсутствию повторов/кликбейта/абсолютов, качеству пяти заголовков и требованиям ниже. Верни ТОЛЬКО JSON {"score":целое 0-100,"verdict":"PASS" или "REVISE","problems":[],"warnings":[]}. PASS разрешён только при score>=90 и problems=[].\n'''+standards+'\nМАТЕРИАЛ:\n'+json.dumps(edited,ensure_ascii=False)
+          audit=obj(call('Независимый аудитор. Будь критичен; авторство и предыдущие правки тебе неизвестны.',audit_prompt,.05))
+          print('AUDIT_1',json.dumps(audit,ensure_ascii=False))
+          if int(audit.get('score',0))<90 or audit.get('problems'):
+              repair=obj(call('Ты senior rewrite editor. Исправь все замечания независимого аудитора, не добавляя неподтверждённых фактов.',standards+'\nМАТЕРИАЛ:\n'+json.dumps(edited,ensure_ascii=False)+'\nАУДИТ:\n'+json.dumps(audit,ensure_ascii=False)+'\n'+schema,.12))
+              edited=repair
+              audit=obj(call('Независимый аудитор. Будь критичен; авторство и предыдущие правки тебе неизвестны.',audit_prompt.split('МАТЕРИАЛ:')[0]+'МАТЕРИАЛ:\n'+json.dumps(edited,ensure_ascii=False),.05))
+              print('AUDIT_2',json.dumps(audit,ensure_ascii=False))
+          words=len(re.findall(r'[А-Яа-яЁёA-Za-z0-9-]+',edited.get('article_markdown','')))
+          headlines=edited.get('headlines') or []
+          bad_abs=re.findall(r'\b(?:всегда|никогда|100%|гарантированно)\b',edited.get('article_markdown',''),re.I)
+          ok=int(audit.get('score',0))>=90 and audit.get('problems')==[] and 900<=words<=1400 and len(headlines)==5 and not bad_abs and edited.get('source_urls')==[source_url]
+          print('FINAL_CHECK',{'ok':ok,'words':words,'score':audit.get('score'),'problems':audit.get('problems'),'headlines':len(headlines),'absolutes':bad_abs})
+          if not ok: raise SystemExit('FINAL QUALITY GATE FAILED')
+          header=f'''✅ ГОТОВАЯ СТАТЬЯ — YandexGPT only\nID: YANDEX-{int(time.time())}\nЗаголовок: {edited['headline']}\nQuality: {audit['score']}/100\nProblems: {audit['problems']}\nИсточник: {source_url}'''
+          def send(text):
+              r=requests.post(f'https://api.telegram.org/bot{TG}/sendMessage',json={'chat_id':CHAT,'text':text,'disable_web_page_preview':True},timeout=30); r.raise_for_status(); d=r.json(); assert d.get('ok'); print('TELEGRAM_SEND_OK',d['result']['message_id']); return d['result']['message_id']
+          ids=[send(header)]
+          text=edited['article_markdown'].strip()
+          while text:
+              if len(text)<=3900: chunk,text=text,''
+              else:
+                  cut=text.rfind('\n\n',0,3900)
+                  if cut<1000: cut=3900
+                  chunk,text=text[:cut].strip(),text[cut:].strip()
+              ids.append(send(chunk))
+          meta='\n\n5 вариантов заголовка:\n'+'\n'.join(f'{i+1}. {x}' for i,x in enumerate(headlines))+'\n\nFact-check:\n'+'\n'.join('• '+x for x in edited.get('fact_check',[]))
+          ids.append(send(meta))
+          print('TELEGRAM_ARTICLE_DELIVERED',ids)
+          print('FINAL_ARTICLE_JSON='+json.dumps({'headline':edited['headline'],'headlines':headlines,'article_markdown':edited['article_markdown'],'fact_check':edited.get('fact_check'),'source_urls':edited.get('source_urls'),'quality_audit':audit},ensure_ascii=False))
+          PY
