@@ -133,9 +133,16 @@ def _or_client():
 
 
 def _or_call(model: str, messages: list[dict], temperature: float = 0.2):
-    # The provider is the source of truth for real quota. Local accounting is
-    # telemetry-only and is incremented only after a successful API response.
-    response = _or_client().chat.completions.create(model=model, messages=messages, temperature=temperature)
+    # Ask OpenRouter for JSON mode and require a provider/model that supports
+    # the parameters we send. This is especially important for openrouter/free,
+    # which otherwise may route to a model that ignores structured output.
+    response = _or_client().chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        response_format={"type": "json_object"},
+        extra_body={"provider": {"require_parameters": True}},
+    )
     try:
         record_success()
     except Exception:
@@ -143,24 +150,43 @@ def _or_call(model: str, messages: list[dict], temperature: float = 0.2):
     return response
 
 
+def _actual_model(response, requested_model: str) -> str:
+    return _as_text(getattr(response, "model", "")) or requested_model
+
+
 def _openrouter_json(models: list[str], prompt: str, role: str, temperature: float, provider_name: str):
     errors = []
-    for model in dict.fromkeys(m for m in models if m):
-        try:
-            response = _or_call(
-                model,
-                [
-                    {"role": "system", "content": EDITORIAL_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature,
-            )
-            parsed = _extract(response.choices[0].message.content or "")
-            if not isinstance(parsed, dict):
-                raise ValueError("модель вернула не JSON")
-            return parsed, model
-        except Exception as exc:
-            errors.append(f"{model}: {exc}")
+    unique_models = list(dict.fromkeys(m for m in models if m))
+    for requested_model in unique_models:
+        for attempt in (1, 2):
+            try:
+                retry_note = "" if attempt == 1 else (
+                    "\n\nПОВТОР ПОСЛЕ ОШИБКИ ФОРМАТА: верни только один JSON-объект "
+                    "без markdown, пояснений до/после JSON и без незакрытых строк."
+                )
+                response = _or_call(
+                    requested_model,
+                    [
+                        {"role": "system", "content": EDITORIAL_SYSTEM},
+                        {"role": "user", "content": prompt + retry_note},
+                    ],
+                    temperature,
+                )
+                actual_model = _actual_model(response, requested_model)
+                parsed = _extract(response.choices[0].message.content or "")
+                if not isinstance(parsed, dict):
+                    raise ValueError("модель вернула не JSON")
+                log.info(
+                    "OpenRouter JSON OK role=%s requested=%s actual=%s attempt=%s",
+                    role, requested_model, actual_model, attempt,
+                )
+                return parsed, requested_model, actual_model
+            except Exception as exc:
+                errors.append(f"{requested_model} attempt {attempt}: {exc}")
+                log.warning(
+                    "OpenRouter JSON failure role=%s requested=%s attempt=%s error=%s",
+                    role, requested_model, attempt, exc,
+                )
     raise RuntimeError(f"{role} недоступен: " + " | ".join(errors))
 
 
@@ -168,15 +194,15 @@ def _draft(topic: dict) -> dict:
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY не задан")
     sources = _source_urls(topic)
-    parsed, model = _openrouter_json(
+    parsed, requested_model, actual_model = _openrouter_json(
         [DEEPSEEK_MODEL, OPENROUTER_MODEL, "openrouter/free"],
         draft_prompt(topic, sources),
         "Автор-аналитик",
         0.32,
         "DeepSeek/OpenRouter",
     )
-    provider = "DeepSeek/OpenRouter" if model == DEEPSEEK_MODEL else "OpenRouter"
-    data = _normalize(parsed, provider, model)
+    provider = "FixedFree/OpenRouter" if requested_model == DEEPSEEK_MODEL else "OpenRouter"
+    data = _normalize(parsed, provider, actual_model)
     data["source_urls"] = sources
     return data
 
@@ -220,18 +246,18 @@ def _final_edit(data: dict, repair_notes: str = "") -> dict:
             raise ValueError("OpenAI вернул некорректный JSON")
         return _merge_editor(data, parsed, "OpenAI", OPENAI_MODEL)
 
-    parsed, model = _openrouter_json(
+    parsed, requested_model, actual_model = _openrouter_json(
         [OPENROUTER_EDITOR_MODEL, "openrouter/free"],
         prompt,
         "Финальный редактор",
         0.08,
         "OpenAI/OpenRouter",
     )
-    return _merge_editor(data, parsed, "OpenAI/OpenRouter", model)
+    return _merge_editor(data, parsed, "OpenAI/OpenRouter", actual_model)
 
 
 def _quality_audit(data: dict) -> dict:
-    parsed, model = _openrouter_json(
+    parsed, requested_model, actual_model = _openrouter_json(
         [OPENROUTER_EDITOR_MODEL, OPENROUTER_MODEL, "openrouter/free"],
         quality_auditor_prompt(data),
         "Независимый quality auditor",
@@ -251,10 +277,10 @@ def _quality_audit(data: dict) -> dict:
         "improvements": _as_string_list(parsed.get("improvements")),
         "fact_risks": _as_string_list(parsed.get("fact_risks")),
         "strengths": _as_string_list(parsed.get("strengths")),
-        "auditor_model": model,
+        "auditor_model": actual_model,
     }
     data["ai_quality_audit"] = audit
-    data["ai_stages"] = data.get("ai_stages", []) + [f"QualityAudit/OpenRouter:{model}"]
+    data["ai_stages"] = data.get("ai_stages", []) + [f"QualityAudit/OpenRouter:{actual_model}"]
     return audit
 
 
@@ -265,14 +291,14 @@ def _repair(data: dict, topic: dict) -> dict:
         if deterministic["ok"] and audit["verdict"] == "PASS" and audit["total_score"] >= 90 and not audit["blocking_issues"]:
             return data
 
-        parsed, model = _openrouter_json(
+        parsed, requested_model, actual_model = _openrouter_json(
             [OPENROUTER_EDITOR_MODEL, OPENROUTER_MODEL, "openrouter/free"],
             repair_prompt(data, deterministic["problems"], audit, attempt),
             "Senior rewrite editor",
             0.08,
             "Repair/OpenRouter",
         )
-        data = _merge_editor(data, parsed, "Repair/OpenRouter", model)
+        data = _merge_editor(data, parsed, "Repair/OpenRouter", actual_model)
         data["source_urls"] = _source_urls(topic)
         data.pop("ai_quality_audit", None)
 
