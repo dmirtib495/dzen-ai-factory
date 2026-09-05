@@ -43,12 +43,19 @@ ARTICLES_DIR = DATA_DIR / 'articles'
 for p in (LOG_DIR, BACKUP_DIR, OUTBOX_DIR, APPROVED_DIR, REJECTED_DIR, ARTICLES_DIR):
     p.mkdir(parents=True, exist_ok=True)
 
+
 def validate():
     errors = []
-    if not OPENROUTER_API_KEY: errors.append('OPENROUTER_API_KEY не задан')
-    if ARTICLES_PER_DAY * 5 > OPENROUTER_DAILY_LIMIT: errors.append('OPENROUTER_DAILY_LIMIT мал для основной AI-цепочки и ремонта качества')
-    if MIN_ARTICLE_WORDS >= MAX_ARTICLE_WORDS: errors.append('MIN_ARTICLE_WORDS должен быть меньше MAX_ARTICLE_WORDS')
-    if not SCHEDULE_HOURS: errors.append('SCHEDULE_HOURS пуст')
-    if not (YANDEX_API_KEY and YANDEX_FOLDER_ID):
-        errors.append('YANDEX_API_KEY и YANDEX_FOLDER_ID обязательны: YandexGPT используется как обязательный редакционный этап')
+    if not OPENROUTER_API_KEY:
+        errors.append('OPENROUTER_API_KEY не задан')
+    if not YANDEX_API_KEY:
+        errors.append('YANDEX_API_KEY не задан: YandexGPT — обязательный редакционный этап')
+    if not YANDEX_FOLDER_ID:
+        errors.append('YANDEX_FOLDER_ID не задан: YandexGPT — обязательный редакционный этап')
+    if ARTICLES_PER_DAY * 5 > OPENROUTER_DAILY_LIMIT:
+        errors.append('OPENROUTER_DAILY_LIMIT мал для основной AI-цепочки и ремонта качества')
+    if MIN_ARTICLE_WORDS >= MAX_ARTICLE_WORDS:
+        errors.append('MIN_ARTICLE_WORDS должен быть меньше MAX_ARTICLE_WORDS')
+    if not SCHEDULE_HOURS:
+        errors.append('SCHEDULE_HOURS пуст')
     return errors
