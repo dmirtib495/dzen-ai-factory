@@ -34,6 +34,17 @@ jobs:
         run: python -m compileall -q .
       - name: Run test suite
         run: python -m pytest tests/ -v
+      - name: Validate production RSS feeds
+        run: |
+          python - <<'PY'
+          import feedparser
+          from config import RSS_SOURCES
+          assert RSS_SOURCES, 'RSS_SOURCES is empty'
+          for url in RSS_SOURCES:
+              feed = feedparser.parse(url)
+              print(f'RSS {url}: entries={len(feed.entries)} bozo={getattr(feed, "bozo", 0)}')
+              assert len(feed.entries) > 0, f'RSS has no entries: {url}'
+          PY
       - name: Validate configuration
         run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
       - name: Validate professional prompt contracts
