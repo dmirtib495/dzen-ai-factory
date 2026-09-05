@@ -29,6 +29,24 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   updated_at TEXT NOT NULL
 );
 
+-- Defense in depth: even an old/replayed workflow must not be able to push
+-- the shared OpenRouter daily counter above the accepted free-tier ceiling.
+-- Existing legacy rows above 50 are intentionally left untouched; the UTC day
+-- key rolls over naturally and new writes are protected by these triggers.
+CREATE TRIGGER IF NOT EXISTS ai_usage_cap_insert
+BEFORE INSERT ON ai_usage
+WHEN NEW.requests > 50
+BEGIN
+  SELECT RAISE(ABORT, 'ai_usage daily cap exceeded');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ai_usage_cap_update
+BEFORE UPDATE OF requests ON ai_usage
+WHEN NEW.requests > 50
+BEGIN
+  SELECT RAISE(ABORT, 'ai_usage daily cap exceeded');
+END;
+
 CREATE TABLE IF NOT EXISTS resource_usage (
   day TEXT NOT NULL,
   resource TEXT NOT NULL,
