@@ -8,6 +8,7 @@ import requests
 
 from config import RSS_SOURCES
 from db import add_topic, topic_seen
+from dzen_trends import best_trend_match, fetch_auto_trends
 
 AUTO_WORDS=['автомобиль','авто','машин','кроссовер','седан','внедорожник','двигател','коробк','шина','тормоз','масл','аккумулятор','электромобил','гибрид','китайск','toyota','lexus','bmw','mercedes','kia','hyundai','haval','chery','geely','changan','lada','уаз','nissan','honda','volkswagen','audi','car','vehicle','suv','sedan','engine','transmission','tire','brake','battery','electric','hybrid','ford','tesla','mazda','subaru','volvo','porsche']
 NEWS_ONLY=['скандал','авар','катастроф','жертв','политик','войн','криминал']
@@ -33,14 +34,7 @@ def _xml_safe_named_entities(text: str) -> str:
 
 
 def _sanitized_xml_bytes(response) -> bytes:
-    """Return valid UTF-8 XML bytes after repairing illegal HTML entities.
-
-    Some Drom RSS documents declare windows-1251 while requests decodes the
-    response to Unicode. Passing that Unicode back to feedparser with the old
-    declaration produces CharacterEncodingOverride/bozo even after the entity
-    error is fixed. We therefore decode once, repair entities, rewrite the XML
-    declaration to UTF-8, and pass matching UTF-8 bytes to the parser.
-    """
+    """Return valid UTF-8 XML bytes after repairing illegal HTML entities/encoding."""
     encoding=(response.encoding or 'windows-1251').strip() or 'windows-1251'
     try:
         text=response.content.decode(encoding, errors='strict')
@@ -54,7 +48,7 @@ def _sanitized_xml_bytes(response) -> bytes:
 def _parse_feed(url: str):
     """Fetch RSS explicitly, repair invalid entities/encoding, then parse."""
     try:
-        response=requests.get(url,timeout=30,headers={'User-Agent':'dzen-ai-factory/1.0'})
+        response=requests.get(url,timeout=30,headers={'User-Agent':'dzen-ai-factory/2.0'})
         response.raise_for_status()
         return feedparser.parse(_sanitized_xml_bytes(response))
     except Exception:
@@ -71,9 +65,25 @@ def score(title,summary,age_hours=12):
     return round(s,2)
 
 
+def _load_dzen_trends(diagnostics: list[str]):
+    """Best-effort popularity signal; RSS remains a safe factual-source fallback."""
+    try:
+        trends=fetch_auto_trends(top_channels=8,posts_per_channel=12,period=30,limit=60)
+        diagnostics.append(f'dzen_trends: loaded={len(trends)}')
+        if trends:
+            leaders=', '.join(f'{x.channel_title}:{x.views}' for x in trends[:5])
+            diagnostics.append(f'dzen_trends leaders={leaders}')
+        return trends
+    except Exception as exc:
+        diagnostics.append(f'dzen_trends unavailable={exc!r}; using RSS-only fallback')
+        return []
+
+
 def collect_topics(limit=40):
     candidates=[]
     diagnostics=[]
+    trends=_load_dzen_trends(diagnostics)
+
     for url in RSS_SOURCES:
         feed=_parse_feed(url)
         entries=list(getattr(feed,'entries',[]) or [])
@@ -93,16 +103,48 @@ def collect_topics(limit=40):
                 if published:
                     try: age=max(0,(dt.datetime.now(dt.timezone.utc)-dt.datetime(*published[:6],tzinfo=dt.timezone.utc)).total_seconds()/3600)
                     except Exception: pass
-                candidates.append((score(title,summary,age),title,link,source,summary))
+
+                base_score=score(title,summary,age)
+                trend,trend_rel,trend_bonus=best_trend_match(title,trends)
+                final_score=round(base_score+trend_bonus,2)
+                candidates.append({
+                    'score':final_score,
+                    'base_score':base_score,
+                    'title':title,
+                    'link':link,
+                    'source':source,
+                    'summary':summary,
+                    # Trend metadata is selection telemetry only. ai_writer uses
+                    # link/summary above as factual evidence and never treats the
+                    # competitor Dzen page as a read source.
+                    'trend_title':trend.title if trend else '',
+                    'trend_url':trend.url if trend else '',
+                    'trend_views':trend.views if trend else 0,
+                    'trend_channel':trend.channel_title if trend else '',
+                    'trend_channel_views30days':trend.channel_views30days if trend else 0,
+                    'trend_relevance':round(trend_rel,3),
+                    'trend_bonus':trend_bonus,
+                })
             except Exception as exc:
                 skipped_bad += 1
                 diagnostics.append(f'{url}: skipped malformed item error={exc!r}')
         if skipped_bad:
             diagnostics.append(f'{url}: skipped_bad_entries={skipped_bad}')
-    candidates.sort(reverse=True,key=lambda x:x[0])
+
+    candidates.sort(reverse=True,key=lambda x:x['score'])
     out=[]
-    for sc,title,link,source,summary in candidates[:limit]:
-        tid=add_topic(title,link,source,summary,sc)
-        out.append({'id':tid,'title':title,'link':link,'source':source,'summary':summary,'score':sc})
+    for item in candidates[:limit]:
+        tid=add_topic(item['title'],item['link'],item['source'],item['summary'],item['score'])
+        item=dict(item)
+        item['id']=tid
+        out.append(item)
+
+    trend_matches=[x for x in out if x.get('trend_url')]
+    diagnostics.append(f'dzen_trend_matches_in_output={len(trend_matches)}/{len(out)}')
+    for x in trend_matches[:5]:
+        diagnostics.append(
+            f"trend_match rss={x['title']!r} <- dzen={x['trend_title']!r} "
+            f"views={x['trend_views']} channel={x['trend_channel']!r} bonus={x['trend_bonus']}"
+        )
     print('topic_hunter:', '; '.join(diagnostics), 'accepted=', len(out))
     return out
