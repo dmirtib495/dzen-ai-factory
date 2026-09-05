@@ -87,31 +87,33 @@ def _nearest_paragraph_at_or_after(paragraphs: list[int], target: int, used: set
     return target
 
 
+def _last_paragraph_before(paragraphs: list[int], heading_index: int) -> int | None:
+    candidates = [p for p in paragraphs if p < heading_index]
+    return candidates[-1] if candidates else None
+
+
 def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
-    """Choose stable reading-flow anchors, with the interior image near an interior section when possible."""
+    """Choose editorial reading-flow anchors instead of appending illustrations at the end."""
     paragraphs = _paragraph_indices(lines)
     if not paragraphs:
         return [max(0, len(lines) - 1)] * count
 
-    # Spread illustrations through the story rather than collecting them at the end.
     ratios_by_count = {
-        3: (0.18, 0.52, 0.84),
-        4: (0.15, 0.38, 0.62, 0.86),
-        5: (0.13, 0.32, 0.51, 0.70, 0.88),
+        3: (0.05, 0.50, 0.82),
+        4: (0.05, 0.34, 0.62, 0.84),
+        5: (0.05, 0.31, 0.52, 0.72, 0.88),
     }
     ratios = ratios_by_count[count]
     used: set[int] = set()
     anchors: list[int] = []
     last = paragraphs[-1]
 
-    for ratio in ratios:
-        target = round(last * ratio)
+    for pos, ratio in enumerate(ratios):
+        target = paragraphs[0] if pos == 0 else round(last * ratio)
         anchor = _nearest_paragraph_at_or_after(paragraphs, target, used)
         used.add(anchor)
         anchors.append(anchor)
 
-    # Slot 4 is the interior/dashboard image. If the article contains a cabin/equipment
-    # section, move this illustration close to the first paragraph under that section.
     if count >= 4:
         interior_keywords = (
             "салон", "интерьер", "оснащ", "комплектац", "эргоном", "мультимед", "оборудован"
@@ -119,11 +121,19 @@ def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
         for i, line in enumerate(lines):
             low = line.lower()
             if line.startswith(("## ", "### ")) and any(k in low for k in interior_keywords):
-                candidate = _nearest_paragraph_at_or_after(paragraphs, i + 1, set(anchors[:3]))
-                anchors[3] = candidate
+                anchors[3] = _nearest_paragraph_at_or_after(paragraphs, i + 1, set(anchors[:3]))
                 break
 
-    # Keep visual order monotonic. Duplicate anchors are shifted to the next available paragraph.
+    if count >= 5:
+        conclusion_keywords = ("итог", "вывод", "вердикт", "заключ")
+        for i, line in enumerate(lines):
+            low = line.lower()
+            if line.startswith(("## ", "### ")) and any(k in low for k in conclusion_keywords):
+                before = _last_paragraph_before(paragraphs, i)
+                if before is not None:
+                    anchors[4] = before
+                break
+
     normalized: list[int] = []
     floor = -1
     for anchor in anchors:
@@ -137,19 +147,19 @@ def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
 
 
 def _add_image(document: Document, image: Path, idx: int, caption: str) -> None:
-    # Keep square FLUX images comfortably inside the printable area and leave room for a caption.
+    # Compact editorial width keeps text and illustrations together instead of creating image-only pages.
     p = document.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(5)
+    p.paragraph_format.space_before = Pt(4)
     p.paragraph_format.space_after = Pt(2)
-    p.add_run().add_picture(str(image), width=Inches(5.75))
+    p.add_run().add_picture(str(image), width=Inches(4.8))
 
     text = (caption or "").strip()
     if text:
         cp = document.add_paragraph(f"Рис. {idx}. {text}")
         cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         cp.paragraph_format.space_before = Pt(0)
-        cp.paragraph_format.space_after = Pt(8)
+        cp.paragraph_format.space_after = Pt(7)
         for run in cp.runs:
             run.italic = True
             run.font.size = Pt(9)
@@ -206,7 +216,6 @@ def build_article_docx(
         for image_idx in images_after.get(line_idx, []):
             _add_image(doc, images[image_idx], image_idx + 1, caption_list[image_idx])
 
-    # Extremely short/malformed markdown may leave an anchor beyond the available lines.
     inserted = {i for indexes in images_after.values() for i in indexes}
     for image_idx, image in enumerate(images):
         if image_idx not in inserted:
