@@ -1,15 +1,54 @@
-import re, html, datetime as dt
+import datetime as dt
+import html
+import html.entities
+import re
+
 import feedparser
+import requests
+
 from config import RSS_SOURCES
 from db import add_topic, topic_seen
 
 AUTO_WORDS=['автомобиль','авто','машин','кроссовер','седан','внедорожник','двигател','коробк','шина','тормоз','масл','аккумулятор','электромобил','гибрид','китайск','toyota','lexus','bmw','mercedes','kia','hyundai','haval','chery','geely','changan','lada','уаз','nissan','honda','volkswagen','audi','car','vehicle','suv','sedan','engine','transmission','tire','brake','battery','electric','hybrid','ford','tesla','mazda','subaru','volvo','porsche']
 NEWS_ONLY=['скандал','авар','катастроф','жертв','политик','войн','криминал']
+XML_PREDEFINED={'amp','lt','gt','quot','apos'}
+ENTITY_RE=re.compile(r'&([A-Za-z][A-Za-z0-9]+);')
 
 
 def clean(s):
     s=re.sub('<[^>]+>',' ',s or '')
     return html.unescape(re.sub(r'\s+',' ',s)).strip()
+
+
+def _xml_safe_named_entities(text: str) -> str:
+    """Convert HTML named entities that are illegal in XML RSS to numeric refs.
+
+    XML only defines amp/lt/gt/quot/apos. Drom reviews.rss currently contains
+    entities such as &laquo;, which make strict XML parsers fail even though
+    feedparser can recover. Numeric character references remain XML-valid.
+    """
+    def repl(match):
+        name=match.group(1)
+        if name in XML_PREDEFINED:
+            return match.group(0)
+        codepoint=html.entities.name2codepoint.get(name)
+        return f'&#{codepoint};' if codepoint else match.group(0)
+    return ENTITY_RE.sub(repl,text)
+
+
+def _parse_feed(url: str):
+    """Fetch RSS explicitly, sanitize invalid HTML entities, then parse.
+
+    Falls back to feedparser's own URL fetch only if HTTP retrieval itself
+    fails, so a temporary source/network issue does not crash topic discovery.
+    """
+    try:
+        response=requests.get(url,timeout=30,headers={'User-Agent':'dzen-ai-factory/1.0'})
+        response.raise_for_status()
+        sanitized=_xml_safe_named_entities(response.text)
+        return feedparser.parse(sanitized)
+    except Exception:
+        return feedparser.parse(url)
 
 
 def score(title,summary,age_hours=12):
@@ -26,7 +65,7 @@ def collect_topics(limit=40):
     candidates=[]
     diagnostics=[]
     for url in RSS_SOURCES:
-        feed=feedparser.parse(url)
+        feed=_parse_feed(url)
         entries=list(getattr(feed,'entries',[]) or [])
         bozo_exc=getattr(feed,'bozo_exception',None)
         diagnostics.append(f'{url}: entries={len(entries)} bozo={getattr(feed,"bozo",0)} bozo_exception={bozo_exc!r}')
