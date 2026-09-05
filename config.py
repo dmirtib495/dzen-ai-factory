@@ -26,7 +26,11 @@ CHANNEL_NAME = 'Авто без переплаты'
 MIN_ARTICLE_WORDS = int(os.getenv('MIN_ARTICLE_WORDS', '900'))
 MAX_ARTICLE_WORDS = int(os.getenv('MAX_ARTICLE_WORDS', '1400'))
 SCHEDULE_HOURS = tuple(int(x) for x in os.getenv('SCHEDULE_HOURS', '6,12,18').split(',') if x.strip())
-RSS_SOURCES = [x.strip() for x in os.getenv('RSS_SOURCES', 'https://www.motor1.com/rss/,https://news.drom.ru/rss/').split(',') if x.strip()]
+# Only real XML feeds belong here. Drom documents these endpoints on drom.ru/export/.
+RSS_SOURCES = [x.strip() for x in os.getenv(
+    'RSS_SOURCES',
+    'https://www.drom.ru/export/xml/news.rss,https://www.drom.ru/export/xml/reviews.rss'
+).split(',') if x.strip()]
 
 DB_PATH = DATA_DIR / 'factory.db'
 LOCK_PATH = DATA_DIR / 'factory.lock'
