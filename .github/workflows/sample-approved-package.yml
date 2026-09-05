@@ -1,3 +1,4 @@
+# qa rebuild: inline-layout-v2
 name: Rebuild Approved Sample Package
 
 on:
@@ -102,7 +103,7 @@ jobs:
       - name: Upload rebuilt sample for QA
         uses: actions/upload-artifact@v4
         with:
-          name: approved-sample-article-8-batch-1
+          name: approved-sample-article-8-batch-1-v2
           path: |
             data/packages/
             data/current_package.json
