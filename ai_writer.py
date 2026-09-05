@@ -11,7 +11,6 @@ from config import (
     OPENAI_API_KEY,
     OPENAI_MODEL,
     OPENROUTER_API_KEY,
-    OPENROUTER_DAILY_LIMIT,
     OPENROUTER_EDITOR_MODEL,
     OPENROUTER_MODEL,
     YANDEX_API_KEY,
@@ -27,7 +26,7 @@ from editorial_prompts import (
     yandex_editor_prompt,
 )
 from quality_checker import check_article
-from quota import reserve
+from quota import record_success
 
 log = logging.getLogger(__name__)
 
@@ -134,9 +133,14 @@ def _or_client():
 
 
 def _or_call(model: str, messages: list[dict], temperature: float = 0.2):
-    if not reserve():
-        raise RuntimeError(f"Дневной лимит OpenRouter исчерпан ({OPENROUTER_DAILY_LIMIT})")
-    return _or_client().chat.completions.create(model=model, messages=messages, temperature=temperature)
+    # The provider is the source of truth for real quota. Local accounting is
+    # telemetry-only and is incremented only after a successful API response.
+    response = _or_client().chat.completions.create(model=model, messages=messages, temperature=temperature)
+    try:
+        record_success()
+    except Exception:
+        log.exception("OpenRouter usage telemetry failed after successful request")
+    return response
 
 
 def _openrouter_json(models: list[str], prompt: str, role: str, temperature: float, provider_name: str):
