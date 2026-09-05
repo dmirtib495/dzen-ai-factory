@@ -44,8 +44,9 @@ def make_cover(title, category='Авто'):
     return path
 
 
-def editorial_prompts(headline: str) -> list[str]:
-    """Build five distinct editorial scenes without spending another AI call."""
+def editorial_prompts(headline: str, count: int = 5) -> list[str]:
+    """Build up to five distinct editorial scenes without another AI call."""
+    count = max(1, min(5, int(count)))
     subject = (headline or 'the exact car model discussed in the article').strip()[:220]
     base = (
         f'Photorealistic editorial automotive photography about: {subject}. '
@@ -60,7 +61,7 @@ def editorial_prompts(headline: str) -> list[str]:
         'Interior cockpit view from the rear seats looking forward, realistic dashboard and steering wheel appropriate to the named vehicle, natural light.',
         'Practical ownership scene at a parking or service area, the named vehicle clearly visible, realistic everyday environment, editorial photojournalism.',
     ]
-    return [base + scene for scene in scenes]
+    return [base + scene for scene in scenes[:count]]
 
 
 def generate_cloudflare_image(prompt: str, output_path: str | Path, *, quota_reserved: bool = False) -> dict:
@@ -108,15 +109,26 @@ def generate_cloudflare_image(prompt: str, output_path: str | Path, *, quota_res
 
 
 def make_contact_sheet(images: list[str | Path], output_path: str | Path, headline: str = '') -> Path:
-    """Create one Telegram preview image containing all five candidates."""
-    if len(images) != 5:
-        raise ValueError(f'Contact sheet requires exactly 5 images; got {len(images)}')
+    """Create one Telegram preview image for an approved-size 3-5 candidate set."""
+    count = len(images)
+    if count < 3 or count > 5:
+        raise ValueError(f'Contact sheet requires 3-5 images; got {count}')
     thumbs = []
     for src in images:
         im = Image.open(src).convert('RGB')
         thumbs.append(ImageOps.fit(im, (640, 640), method=Image.Resampling.LANCZOS))
 
-    sheet = Image.new('RGB', (1920, 1500), 'white')
+    if count == 3:
+        positions = [(0, 100), (640, 100), (1280, 100)]
+        height = 780
+    elif count == 4:
+        positions = [(320, 100), (960, 100), (320, 760), (960, 760)]
+        height = 1440
+    else:
+        positions = [(0, 100), (640, 100), (1280, 100), (320, 760), (960, 760)]
+        height = 1440
+
+    sheet = Image.new('RGB', (1920, height), 'white')
     draw = ImageDraw.Draw(sheet)
     try:
         title_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 34)
@@ -126,7 +138,6 @@ def make_contact_sheet(images: list[str | Path], output_path: str | Path, headli
 
     title = (headline or 'Набор изображений')[:100]
     draw.text((40, 25), title, fill='black', font=title_font)
-    positions = [(0, 100), (640, 100), (1280, 100), (320, 760), (960, 760)]
     for idx, (im, pos) in enumerate(zip(thumbs, positions), 1):
         sheet.paste(im, pos)
         x, y = pos
