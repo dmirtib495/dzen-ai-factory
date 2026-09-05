@@ -1,0 +1,131 @@
+name: Image Provider Diagnostic
+
+on:
+  push:
+    paths:
+      - '.github/workflows/image-provider-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: pip install requests Pillow
+      - name: Run real provider tests
+        run: |
+          python - <<'PY'
+          import base64, io, json, os, time
+          from pathlib import Path
+          from urllib.parse import quote
+          import requests
+          from PIL import Image
+
+          out = Path('image_diagnostic')
+          out.mkdir(exist_ok=True)
+          results = []
+          prompts = [
+              'photorealistic editorial automotive photo of a black Toyota Crown 2017 parked on a clean European city street, natural daylight, realistic proportions, no text, no watermark',
+              'photorealistic editorial automotive photo of a silver Audi sedan driving on a mountain road, natural daylight, realistic wheels and body proportions, no text, no watermark',
+              'photorealistic editorial automotive photo of a white Tesla Model 3 parked near modern architecture, overcast daylight, realistic reflections, no text, no watermark',
+          ]
+
+          def validate(raw):
+              im = Image.open(io.BytesIO(raw))
+              im.load()
+              return im.format, im.size
+
+          # 1) Cloudflare Workers AI - existing project credentials.
+          cf_token = os.getenv('CLOUDFLARE_API_TOKEN','').strip()
+          cf_account = os.getenv('CLOUDFLARE_ACCOUNT_ID','').strip()
+          for i, prompt in enumerate(prompts, 1):
+              started = time.time()
+              row = {'provider':'cloudflare','attempt':i}
+              try:
+                  if not (cf_token and cf_account):
+                      raise RuntimeError('Cloudflare credentials missing')
+                  url = f'https://api.cloudflare.com/client/v4/accounts/{cf_account}/ai/run/@cf/black-forest-labs/flux-1-schnell'
+                  r = requests.post(url, headers={'Authorization':f'Bearer {cf_token}','Content-Type':'application/json'}, json={'prompt':prompt,'steps':4,'seed':1000+i}, timeout=180)
+                  row['http_status'] = r.status_code
+                  r.raise_for_status()
+                  payload = r.json()
+                  image64 = (payload.get('result') or {}).get('image')
+                  if not image64:
+                      raise RuntimeError('No result.image in Cloudflare response')
+                  raw = base64.b64decode(image64)
+                  fmt, size = validate(raw)
+                  path = out / f'cloudflare_{i}.jpg'
+                  path.write_bytes(raw)
+                  row.update(ok=True, seconds=round(time.time()-started,2), bytes=len(raw), format=fmt, size=list(size))
+              except Exception as e:
+                  row.update(ok=False, seconds=round(time.time()-started,2), error=str(e)[:500])
+              results.append(row)
+              print('RESULT', json.dumps(row, ensure_ascii=False))
+
+          # 2) Pollinations - deliberately no key, to verify whether anonymous free access is actually usable now.
+          for i, prompt in enumerate(prompts, 1):
+              started = time.time()
+              row = {'provider':'pollinations_anonymous','attempt':i}
+              try:
+                  url = f'https://gen.pollinations.ai/image/{quote(prompt, safe="")}?model=zimage&width=1024&height=576&seed={2000+i}&nologo=true'
+                  r = requests.get(url, timeout=300)
+                  row['http_status'] = r.status_code
+                  row['content_type'] = r.headers.get('content-type')
+                  row['retry_after'] = r.headers.get('retry-after')
+                  r.raise_for_status()
+                  raw = r.content
+                  fmt, size = validate(raw)
+                  path = out / f'pollinations_{i}.jpg'
+                  path.write_bytes(raw)
+                  row.update(ok=True, seconds=round(time.time()-started,2), bytes=len(raw), format=fmt, size=list(size))
+              except Exception as e:
+                  row.update(ok=False, seconds=round(time.time()-started,2), error=str(e)[:500])
+              results.append(row)
+              print('RESULT', json.dumps(row, ensure_ascii=False))
+
+          # 3) Hugging Face Inference Providers. Test only if an account token already exists.
+          hf = os.getenv('HF_TOKEN','').strip()
+          if not hf:
+              row = {'provider':'huggingface','attempt':0,'ok':False,'error':'HF_TOKEN secret is not configured in this repository; authenticated free-account test cannot be claimed'}
+              results.append(row)
+              print('RESULT', json.dumps(row, ensure_ascii=False))
+          else:
+              for i, prompt in enumerate(prompts, 1):
+                  started = time.time()
+                  row = {'provider':'huggingface','attempt':i}
+                  try:
+                      url = 'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell'
+                      r = requests.post(url, headers={'Authorization':f'Bearer {hf}','Content-Type':'application/json','Accept':'image/jpeg'}, json={'inputs':prompt}, timeout=300)
+                      row['http_status'] = r.status_code
+                      r.raise_for_status()
+                      raw = r.content
+                      fmt, size = validate(raw)
+                      path = out / f'huggingface_{i}.jpg'
+                      path.write_bytes(raw)
+                      row.update(ok=True, seconds=round(time.time()-started,2), bytes=len(raw), format=fmt, size=list(size))
+                  except Exception as e:
+                      row.update(ok=False, seconds=round(time.time()-started,2), error=str(e)[:500])
+                  results.append(row)
+                  print('RESULT', json.dumps(row, ensure_ascii=False))
+
+          (out/'results.json').write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
+          PY
+      - name: Upload diagnostic results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-provider-diagnostic
+          path: image_diagnostic/
+          if-no-files-found: warn
+          retention-days: 7
