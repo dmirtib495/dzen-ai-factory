@@ -14,7 +14,6 @@ load_dotenv()
 
 from cloud_sync import query
 from document_packager import MAX_APPROVED_IMAGES, MIN_APPROVED_IMAGES, build_article_package
-from telegram_notify import send_document
 
 
 def _find_batch_folder(root: Path, batch_id: int) -> Path:
@@ -39,9 +38,7 @@ def _article_day(created_at: str) -> str:
 
 def _subject_label(headline: str) -> str:
     text = (headline or '').strip()
-    # Prefer the concrete vehicle before an editorial colon/question clause.
     text = re.split(r'[:?—|]', text, maxsplit=1)[0].strip()
-    # Remove common editorial lead-ins if they appear before the model.
     text = re.sub(r'^(стоит ли брать|что купить|тест|обзор)\s+', '', text, flags=re.I).strip()
     return text[:90] or 'Автомобиль из материала'
 
@@ -63,11 +60,6 @@ def main():
     parser.add_argument('--article-id', type=int, required=True)
     parser.add_argument('--batch-id', type=int, required=True)
     parser.add_argument('--source-root', default='source-artifact')
-    parser.add_argument(
-        '--send-article-zip',
-        action='store_true',
-        help='Send this individual article ZIP to Telegram after packaging (sample/manual delivery mode).',
-    )
     args = parser.parse_args()
 
     batch_result = query(
@@ -134,18 +126,6 @@ def main():
         [args.article_id, args.batch_id, package_day, run_id, artifact_name, now.isoformat(), now.isoformat()],
     )
 
-    telegram_message_id = None
-    if args.send_article_zip:
-        telegram_message_id = send_document(
-            zip_path,
-            caption=(
-                f'📦 Готовый пример статьи #{args.article_id}\n'
-                f'{headline}\n'
-                f'Word с {image_count} изображениями по тексту + {image_count} JPG в ZIP.'
-            ),
-        )
-        print(f'ARTICLE_SAMPLE_SENT message_id={telegram_message_id}')
-
     pointer = {
         'article_id': args.article_id,
         'batch_id': args.batch_id,
@@ -156,7 +136,6 @@ def main():
         'docx': str(docx_path),
         'zip': str(zip_path),
         'artifact_name': artifact_name,
-        'telegram_message_id': telegram_message_id,
     }
     Path('data/current_package.json').write_text(json.dumps(pointer, ensure_ascii=False, indent=2), encoding='utf-8')
     print('ARTICLE_PACKAGE_READY', json.dumps(pointer, ensure_ascii=False))
