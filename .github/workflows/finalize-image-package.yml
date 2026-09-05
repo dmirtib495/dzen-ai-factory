@@ -1,0 +1,79 @@
+name: Finalize Approved Image Set
+run-name: Finalize Image Set [article #${{ inputs.article_id }} batch #${{ inputs.batch_id }}]
+
+on:
+  workflow_dispatch:
+    inputs:
+      article_id:
+        description: 'Article id in D1'
+        required: true
+      batch_id:
+        description: 'Approved image batch id in D1'
+        required: true
+      source_run_id:
+        description: 'Workflow run containing the image artifact'
+        required: true
+      artifact_name:
+        description: 'Artifact that contains the five images'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dzen-package-finalizer
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Initialize D1 schema
+        run: python cloud/init_d1.py
+      - name: Download approved image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: source-artifact
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+      - name: Build article DOCX and article ZIP
+        run: >-
+          python finalize_article_package.py
+          --article-id '${{ inputs.article_id }}'
+          --batch-id '${{ inputs.batch_id }}'
+          --source-root source-artifact
+      - name: Upload article package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: article-package-${{ inputs.article_id }}-${{ inputs.batch_id }}
+          path: data/packages/*.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Aggregate and send daily package when 3 are ready
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python aggregate_daily_package.py
+      - name: Upload daily ZIP if created
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-package-${{ github.run_number }}
+          path: data/daily_packages/*.zip
+          if-no-files-found: ignore
+          retention-days: 7
