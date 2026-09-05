@@ -13,28 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Extract dzen.guru post payload
+      - name: Inspect dzen.guru post fields
         run: |
           python - <<'PY'
           import html, re, requests
-          url='https://dzen.guru/channels/zr.ru/posts'
-          r=requests.get(url,headers={'User-Agent':'Mozilla/5.0','Accept-Language':'ru-RU,ru;q=0.9'},timeout=30)
-          text=r.text
-          print('STATUS',r.status_code,'LEN',len(text))
-          # Print Dzen links with surrounding text so we can see whether title/views are server-rendered.
-          for m in list(re.finditer(r'https?://(?:www\.)?dzen\.ru/[^"\'<>\\ ]+',text,re.I))[:40]:
-              a=max(0,m.start()-500); b=min(len(text),m.end()+800)
-              snippet=html.unescape(re.sub(r'\\u([0-9a-fA-F]{4})',lambda x: chr(int(x.group(1),16)),text[a:b]))
-              snippet=re.sub(r'\s+',' ',snippet)
-              print('DZEN_LINK_CONTEXT',snippet[:1800])
-          # Look for JSON-ish objects containing title plus views/coverage fields.
-          for key in ['views','viewCount','coverage','reach','title','postTitle','publicationUrl','url']:
-              print('KEY',key,'COUNT',text.lower().count(key.lower()))
-          for pat in [
-              r'"title"\s*:\s*"([^"]{8,200})"',
-              r'"(?:views|viewCount|coverage|reach)"\s*:\s*([0-9]+)',
-              r'"(?:url|publicationUrl)"\s*:\s*"([^"]*dzen[^"]*)"',
-          ]:
-              vals=re.findall(pat,text,re.I)
-              print('PATTERN',pat,'COUNT',len(vals),'SAMPLE',vals[:30])
+          text=requests.get(
+            'https://dzen.guru/channels/zr.ru/posts',
+            headers={'User-Agent':'Mozilla/5.0','Accept-Language':'ru-RU,ru;q=0.9'},
+            timeout=30,
+          ).text
+          # Unescape the Next.js flight stream one level for readable diagnostics.
+          decoded=html.unescape(text).replace('\\"','"').replace('\\n',' ')
+          print('STATUS_LEN',len(text),len(decoded))
+          for key in ['views','reach','title','publishedAt','publication','externalUrl','dzen.ru']:
+            hits=list(re.finditer(key,decoded,re.I))
+            print('\nKEY',key,'HITS',len(hits))
+            for m in hits[:12]:
+              a=max(0,m.start()-350); b=min(len(decoded),m.end()+700)
+              snippet=re.sub(r'\s+',' ',decoded[a:b])
+              print('CTX',snippet[:1200])
           PY
