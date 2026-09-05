@@ -22,6 +22,19 @@ def _find_batch_folder(root: Path, batch_id: int) -> Path:
     return matches[0]
 
 
+def _article_day(created_at: str) -> str:
+    raw = (created_at or '').strip()
+    if raw:
+        try:
+            dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
+        except Exception:
+            pass
+    return datetime.now(timezone.utc).astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--article-id', type=int, required=True)
@@ -43,7 +56,7 @@ def main():
         raise SystemExit(f"Image batch is not approved: {batch.get('status')}")
 
     article_result = query(
-        'SELECT id,headline,article_markdown FROM articles WHERE id=? AND quality_ok=1',
+        'SELECT id,headline,article_markdown,created_at FROM articles WHERE id=? AND quality_ok=1',
         [args.article_id],
     ) or {}
     articles = article_result.get('results', [])
@@ -69,7 +82,7 @@ def main():
     )
 
     now = datetime.now(timezone.utc)
-    package_day = now.astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
+    package_day = _article_day(str(article.get('created_at') or ''))
     run_id = os.getenv('GITHUB_RUN_ID', '').strip()
     artifact_name = f'article-package-{args.article_id}-{args.batch_id}'
     query(
