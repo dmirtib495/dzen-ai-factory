@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -13,6 +14,7 @@ load_dotenv()
 
 from cloud_sync import query
 from document_packager import MAX_APPROVED_IMAGES, MIN_APPROVED_IMAGES, build_article_package
+from telegram_notify import send_document
 
 
 def _find_batch_folder(root: Path, batch_id: int) -> Path:
@@ -35,11 +37,37 @@ def _article_day(created_at: str) -> str:
     return datetime.now(timezone.utc).astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
 
 
+def _subject_label(headline: str) -> str:
+    text = (headline or '').strip()
+    # Prefer the concrete vehicle before an editorial colon/question clause.
+    text = re.split(r'[:?—|]', text, maxsplit=1)[0].strip()
+    # Remove common editorial lead-ins if they appear before the model.
+    text = re.sub(r'^(стоит ли брать|что купить|тест|обзор)\s+', '', text, flags=re.I).strip()
+    return text[:90] or 'Автомобиль из материала'
+
+
+def _captions(headline: str, image_count: int) -> list[str]:
+    subject = _subject_label(headline)
+    templates = [
+        f'{subject}: внешний вид спереди в три четверти.',
+        f'{subject}: вид сзади в три четверти.',
+        f'{subject}: профиль кузова и основные пропорции.',
+        f'{subject}: интерьер, передняя панель и рабочее место водителя.',
+        f'{subject}: автомобиль в обычной дорожной обстановке.',
+    ]
+    return templates[:image_count]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--article-id', type=int, required=True)
     parser.add_argument('--batch-id', type=int, required=True)
     parser.add_argument('--source-root', default='source-artifact')
+    parser.add_argument(
+        '--send-article-zip',
+        action='store_true',
+        help='Send this individual article ZIP to Telegram after packaging (sample/manual delivery mode).',
+    )
     args = parser.parse_args()
 
     batch_result = query(
@@ -63,6 +91,7 @@ def main():
     if not articles:
         raise SystemExit(f'Quality-approved article #{args.article_id} not found')
     article = articles[0]
+    headline = str(article.get('headline') or '')
 
     batch_folder = _find_batch_folder(Path(args.source_root), args.batch_id)
     candidates = json.loads(batch.get('candidate_json') or '[]')
@@ -75,13 +104,14 @@ def main():
         raise SystemExit('One or more approved image files are missing from source artifact')
 
     image_count = len(images)
+    captions = _captions(headline, image_count)
     folder, docx_path, zip_path = build_article_package(
         article_id=args.article_id,
-        headline=str(article.get('headline') or ''),
+        headline=headline,
         article_markdown=str(article.get('article_markdown') or ''),
         approved_images=images,
         output_root='data/packages',
-        captions=[f'Редакционная иллюстрация {i}' for i in range(1, image_count + 1)],
+        captions=captions,
     )
 
     now = datetime.now(timezone.utc)
@@ -103,15 +133,30 @@ def main():
         """,
         [args.article_id, args.batch_id, package_day, run_id, artifact_name, now.isoformat(), now.isoformat()],
     )
+
+    telegram_message_id = None
+    if args.send_article_zip:
+        telegram_message_id = send_document(
+            zip_path,
+            caption=(
+                f'📦 Готовый пример статьи #{args.article_id}\n'
+                f'{headline}\n'
+                f'Word с {image_count} изображениями по тексту + {image_count} JPG в ZIP.'
+            ),
+        )
+        print(f'ARTICLE_SAMPLE_SENT message_id={telegram_message_id}')
+
     pointer = {
         'article_id': args.article_id,
         'batch_id': args.batch_id,
         'package_day': package_day,
         'image_count': image_count,
+        'captions': captions,
         'folder': str(folder),
         'docx': str(docx_path),
         'zip': str(zip_path),
         'artifact_name': artifact_name,
+        'telegram_message_id': telegram_message_id,
     }
     Path('data/current_package.json').write_text(json.dumps(pointer, ensure_ascii=False, indent=2), encoding='utf-8')
     print('ARTICLE_PACKAGE_READY', json.dumps(pointer, ensure_ascii=False))
