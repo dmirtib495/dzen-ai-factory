@@ -28,20 +28,28 @@ def collect_topics(limit=40):
     for url in RSS_SOURCES:
         feed=feedparser.parse(url)
         entries=list(getattr(feed,'entries',[]) or [])
-        diagnostics.append(f'{url}: entries={len(entries)} bozo={getattr(feed,"bozo",0)}')
+        bozo_exc=getattr(feed,'bozo_exception',None)
+        diagnostics.append(f'{url}: entries={len(entries)} bozo={getattr(feed,"bozo",0)} bozo_exception={bozo_exc!r}')
         source=feed.feed.get('title',url)
+        skipped_bad=0
         for e in entries[:100]:
-            title=clean(getattr(e,'title','')); link=clean(getattr(e,'link','')); summary=clean(getattr(e,'summary',''))
-            if not title or topic_seen(title): continue
-            if not link.startswith(('http://','https://')): continue
-            text=(title+' '+summary).lower()
-            if not any(w in text for w in AUTO_WORDS): continue
-            published=getattr(e,'published_parsed',None)
-            age=12
-            if published:
-                try: age=max(0,(dt.datetime.now(dt.timezone.utc)-dt.datetime(*published[:6],tzinfo=dt.timezone.utc)).total_seconds()/3600)
-                except Exception: pass
-            candidates.append((score(title,summary,age),title,link,source,summary))
+            try:
+                title=clean(getattr(e,'title','')); link=clean(getattr(e,'link','')); summary=clean(getattr(e,'summary',''))
+                if not title or topic_seen(title): continue
+                if not link.startswith(('http://','https://')): continue
+                text=(title+' '+summary).lower()
+                if not any(w in text for w in AUTO_WORDS): continue
+                published=getattr(e,'published_parsed',None)
+                age=12
+                if published:
+                    try: age=max(0,(dt.datetime.now(dt.timezone.utc)-dt.datetime(*published[:6],tzinfo=dt.timezone.utc)).total_seconds()/3600)
+                    except Exception: pass
+                candidates.append((score(title,summary,age),title,link,source,summary))
+            except Exception as exc:
+                skipped_bad += 1
+                diagnostics.append(f'{url}: skipped malformed item error={exc!r}')
+        if skipped_bad:
+            diagnostics.append(f'{url}: skipped_bad_entries={skipped_bad}')
     candidates.sort(reverse=True,key=lambda x:x[0])
     out=[]
     for sc,title,link,source,summary in candidates[:limit]:
