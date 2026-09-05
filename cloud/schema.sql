@@ -29,6 +29,17 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   updated_at TEXT NOT NULL
 );
 
+-- Generic shared resource counters. Keep OpenRouter request telemetry in
+-- ai_usage unchanged; Workers AI neurons use a separate resource row so the
+-- two independent daily budgets cannot interfere with each other.
+CREATE TABLE IF NOT EXISTS resource_usage (
+  day TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  used REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(day, resource)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
