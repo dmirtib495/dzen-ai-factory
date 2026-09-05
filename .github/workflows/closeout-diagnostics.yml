@@ -1,0 +1,100 @@
+name: Closeout Diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/closeout-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      YANDEX_API_KEY: ci-placeholder
+      YANDEX_FOLDER_ID: ci-placeholder
+      DEEPSEEK_MODEL: openrouter/free
+      OPENROUTER_MODEL: openrouter/free
+      OPENROUTER_EDITOR_MODEL: openrouter/free
+      ARTICLES_PER_DAY: 1
+      OPENROUTER_DAILY_LIMIT: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Diagnose Drom reviews RSS exactly
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          import requests, feedparser
+          from topic_hunter import clean
+          url='https://www.drom.ru/export/xml/reviews.rss'
+          raw=requests.get(url,timeout=30)
+          print('HTTP=',raw.status_code,'content_type=',raw.headers.get('content-type'),'bytes=',len(raw.content))
+          raw.raise_for_status()
+          feed=feedparser.parse(raw.content)
+          print('bozo=',feed.bozo)
+          print('bozo_exception_type=',type(getattr(feed,'bozo_exception',None)).__name__)
+          print('bozo_exception=',repr(getattr(feed,'bozo_exception',None)))
+          try:
+              ET.fromstring(raw.content)
+              print('stdlib_xml=VALID')
+          except ET.ParseError as exc:
+              print('stdlib_xml=INVALID')
+              print('stdlib_parse_error=',repr(exc),'position=',getattr(exc,'position',None))
+              line,col=getattr(exc,'position',(None,None))
+              if line:
+                  lines=raw.text.splitlines()
+                  for n in range(max(1,line-2),min(len(lines),line+2)+1):
+                      print(f'xml_line_{n}=',lines[n-1][:500])
+          bad=[]
+          usable=0
+          for i,e in enumerate(feed.entries):
+              try:
+                  title=clean(getattr(e,'title',''))
+                  link=clean(getattr(e,'link',''))
+                  summary=clean(getattr(e,'summary',''))
+                  if title and link.startswith(('http://','https://')):
+                      usable += 1
+                  else:
+                      bad.append((i,title[:80],link[:120]))
+              except Exception as exc:
+                  bad.append((i,'EXCEPTION',repr(exc)))
+          print('feed_entries=',len(feed.entries),'usable_entries=',usable,'bad_entries=',bad)
+          PY
+      - name: Run real topic_hunter against current feeds
+        run: |
+          python - <<'PY'
+          from topic_hunter import collect_topics
+          topics=collect_topics(limit=40)
+          print('topic_hunter_result_count=',len(topics))
+          print('topic_hunter_sample=',[(t['title'],t['link']) for t in topics[:5]])
+          PY
+      - name: Probe openrouter free router with five real article draft and final passes
+        run: |
+          python - <<'PY'
+          import feedparser
+          from ai_writer import _draft, _final_edit
+          feed=feedparser.parse('https://www.drom.ru/export/xml/reviews.rss')
+          entries=[e for e in feed.entries if getattr(e,'title','') and getattr(e,'link','')][:5]
+          if len(entries)<5:
+              raise SystemExit('Need 5 real RSS topics for probe')
+          for i,e in enumerate(entries,1):
+              topic={'source':'Drom reviews RSS','title':e.title,'link':e.link,'summary':getattr(e,'summary','')}
+              draft=_draft(topic)
+              print(f'PROBE_{i}_DRAFT_JSON=OK actual_model={draft.get("ai_model")} headline={draft.get("headline")!r} words={len(draft.get("article_markdown","").split())}')
+              final=_final_edit(draft)
+              print(f'PROBE_{i}_FINAL_JSON=OK actual_model={final.get("ai_model")} headline={final.get("headline")!r} words={len(final.get("article_markdown","").split())}')
+          PY
