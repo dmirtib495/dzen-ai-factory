@@ -10,11 +10,12 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '').strip()
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'openrouter/free').strip()
-# The previous DeepSeek :free slug was retired by OpenRouter. Keep the
-# variable name for backward compatibility, but default to OpenRouter's
-# zero-cost router until a fixed DeepSeek free endpoint exists again.
+# The previous fixed DeepSeek :free slug was retired by OpenRouter. Keep this
+# variable for backward compatibility but route through the current free pool.
 DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'openrouter/free').strip()
-OPENROUTER_EDITOR_MODEL = os.getenv('OPENROUTER_EDITOR_MODEL', 'openai/gpt-oss-20b:free').strip()
+# Fixed free OpenAI OSS slugs are also not stable; use the free router unless
+# a direct OPENAI_API_KEY is configured.
+OPENROUTER_EDITOR_MODEL = os.getenv('OPENROUTER_EDITOR_MODEL', 'openrouter/free').strip()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '').strip()
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5-mini').strip()
 YANDEX_API_KEY = os.getenv('YANDEX_API_KEY', '').strip()
