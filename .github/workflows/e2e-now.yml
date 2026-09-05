@@ -1,4 +1,4 @@
-# production E2E trigger: 2026-09-05-v4-five-yandex-reviewed
+# production E2E trigger: 2026-09-05-v5-latest-editorial-pipeline
 name: Dzen Production E2E Now
 
 on:
@@ -68,7 +68,9 @@ jobs:
       - name: Require Yandex AI credentials
         run: |
           python - <<'PY'
+          from dotenv import load_dotenv
           import os
+          load_dotenv('.env')
           assert os.getenv('YANDEX_API_KEY','').strip(), 'YANDEX_API_KEY secret is missing'
           assert os.getenv('YANDEX_FOLDER_ID','').strip(), 'YANDEX_FOLDER_ID secret is missing'
           print('Yandex AI credentials: present')
