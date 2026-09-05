@@ -287,14 +287,67 @@ def _final_edit(data: dict, repair_notes: str = "") -> dict:
     return _merge_editor(data, parsed, "OpenAI/OpenRouter", actual_model)
 
 
-def _quality_audit(data: dict) -> dict:
-    parsed, requested_model, actual_model = _openrouter_json(
-        [OPENROUTER_EDITOR_MODEL, OPENROUTER_MODEL, "openrouter/free"],
-        quality_auditor_prompt(data),
-        "Независимый quality auditor",
-        0.0,
-        "QualityAudit/OpenRouter",
+def _audit_input(data: dict) -> dict:
+    """Expose only publication content/evidence to an auditor, never provider history."""
+    keys = (
+        "headline", "headlines", "category", "article_markdown", "fact_check",
+        "image_prompt", "source_urls", "commercial_intent", "source_evidence",
     )
+    return {key: data.get(key) for key in keys if key in data}
+
+
+def _yandex_quality_audit(data: dict) -> tuple[dict, str]:
+    if not (YANDEX_API_KEY and YANDEX_FOLDER_ID):
+        raise RuntimeError("Yandex quality-audit fallback недоступен: нужны YANDEX_API_KEY и YANDEX_FOLDER_ID")
+
+    audit_data = _audit_input(data)
+    prompt = (
+        "РОЛЬ: независимый внешний аудитор качества автомобильного материала. "
+        "Ты НЕ участвовал в создании или редактуре этого текста и не должен предполагать, "
+        "кто его писал или редактировал. Оцени только предъявленный материал и evidence. "
+        "Не подтверждай предыдущие решения редактора; ищи реальные основания для PASS/REVISE/REJECT.\n\n"
+        + quality_auditor_prompt(audit_data)
+    )
+    response = requests.post(
+        "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+        headers={"Authorization": f"Api-Key {YANDEX_API_KEY}", "Content-Type": "application/json"},
+        json={
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/{YANDEX_MODEL}",
+            "completionOptions": {"stream": False, "temperature": 0.0, "maxTokens": 4000},
+            "messages": [
+                {"role": "system", "text": "Ты независимый аудитор. Верни только валидный JSON указанной схемы."},
+                {"role": "user", "text": prompt},
+            ],
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    parsed = _extract(response.json()["result"]["alternatives"][0]["message"]["text"])
+    if not isinstance(parsed, dict):
+        raise ValueError("Yandex quality-audit fallback вернул некорректный JSON")
+    log.warning("QUALITY_AUDIT_FALLBACK provider=YandexGPT reason=openrouter_free_daily_limit model=%s", YANDEX_MODEL)
+    return parsed, YANDEX_MODEL
+
+
+def _quality_audit(data: dict) -> dict:
+    audit_provider = "QualityAudit/OpenRouter"
+    try:
+        parsed, requested_model, actual_model = _openrouter_json(
+            [OPENROUTER_EDITOR_MODEL, OPENROUTER_MODEL, "openrouter/free"],
+            quality_auditor_prompt(_audit_input(data)),
+            "Независимый quality auditor",
+            0.0,
+            audit_provider,
+        )
+    except Exception as exc:
+        if not _is_openrouter_free_daily_limit(exc):
+            raise
+        log.warning(
+            "OpenRouter account-wide free daily budget exhausted during quality audit; switching ONLY this audit to YandexGPT fallback"
+        )
+        parsed, actual_model = _yandex_quality_audit(data)
+        audit_provider = "QualityAudit/YandexFallback"
+
     verdict = _as_text(parsed.get("verdict")).upper()
     try:
         total_score = int(float(parsed.get("total_score", 0)))
@@ -309,9 +362,10 @@ def _quality_audit(data: dict) -> dict:
         "fact_risks": _as_string_list(parsed.get("fact_risks")),
         "strengths": _as_string_list(parsed.get("strengths")),
         "auditor_model": actual_model,
+        "auditor_provider": audit_provider,
     }
     data["ai_quality_audit"] = audit
-    data["ai_stages"] = data.get("ai_stages", []) + [f"QualityAudit/OpenRouter:{actual_model}"]
+    data["ai_stages"] = data.get("ai_stages", []) + [f"{audit_provider}:{actual_model}"]
     return audit
 
 
