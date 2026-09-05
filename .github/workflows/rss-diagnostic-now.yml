@@ -17,30 +17,45 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install feedparser requests
-      - name: Exact reviews RSS diagnosis and item safety
+      - run: pip install -r requirements.txt
+      - name: Exact reviews RSS diagnosis and sanitized parser safety
+        env:
+          OPENROUTER_API_KEY: x
+          YANDEX_API_KEY: x
+          YANDEX_FOLDER_ID: x
+          ARTICLES_PER_DAY: 1
+          OPENROUTER_DAILY_LIMIT: 50
         run: |
           python - <<'PY'
           import xml.etree.ElementTree as ET
           import requests, feedparser
+          from topic_hunter import _xml_safe_named_entities, _parse_feed
+
           url='https://www.drom.ru/export/xml/reviews.rss'
           raw=requests.get(url,timeout=30); raw.raise_for_status()
           print('HTTP=',raw.status_code,'content_type=',raw.headers.get('content-type'),'bytes=',len(raw.content))
-          feed=feedparser.parse(raw.content)
-          print('bozo=',feed.bozo)
-          print('bozo_exception_type=',type(getattr(feed,'bozo_exception',None)).__name__)
-          print('bozo_exception=',repr(getattr(feed,'bozo_exception',None)))
+
+          raw_feed=feedparser.parse(raw.content)
+          print('raw_bozo=',raw_feed.bozo)
+          print('raw_bozo_exception=',repr(getattr(raw_feed,'bozo_exception',None)))
           try:
               ET.fromstring(raw.content)
-              print('stdlib_xml=VALID')
+              print('raw_stdlib_xml=VALID')
           except ET.ParseError as exc:
-              print('stdlib_xml=INVALID')
-              print('stdlib_parse_error=',repr(exc),'position=',getattr(exc,'position',None))
+              print('raw_stdlib_xml=INVALID')
+              print('raw_stdlib_parse_error=',repr(exc),'position=',getattr(exc,'position',None))
               line,col=getattr(exc,'position',(None,None))
               if line:
                   lines=raw.text.splitlines()
-                  for n in range(max(1,line-2),min(len(lines),line+2)+1):
-                      print(f'xml_line_{n}=',lines[n-1][:1000])
+                  print('offending_xml_line=',lines[line-1][:1200])
+
+          sanitized=_xml_safe_named_entities(raw.text)
+          ET.fromstring(sanitized)
+          print('sanitized_stdlib_xml=VALID')
+          feed=_parse_feed(url)
+          print('sanitized_bozo=',getattr(feed,'bozo',0))
+          print('sanitized_bozo_exception=',repr(getattr(feed,'bozo_exception',None)))
+
           usable=[]; bad=[]
           for i,e in enumerate(feed.entries):
               try:
@@ -54,7 +69,10 @@ jobs:
               except Exception as exc:
                   bad.append((i,'EXCEPTION',repr(exc)))
           print('feed_entries=',len(feed.entries),'usable_entries=',len(usable),'bad_entries=',bad)
-          print('sample_first=',usable[:3]); print('sample_last=',usable[-3:])
+          if getattr(feed,'bozo',0):
+              raise SystemExit('Sanitized feed is still bozo')
+          if bad:
+              raise SystemExit(f'Bad entries remain: {bad}')
           PY
       - name: Real topic_hunter run
         env:
@@ -64,7 +82,6 @@ jobs:
           ARTICLES_PER_DAY: 1
           OPENROUTER_DAILY_LIMIT: 50
         run: |
-          pip install -r requirements.txt
           python - <<'PY'
           from topic_hunter import collect_topics
           topics=collect_topics(limit=40)
