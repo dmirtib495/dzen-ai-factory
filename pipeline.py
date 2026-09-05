@@ -39,6 +39,16 @@ def _safe(label, fn, *args, **kwargs):
         return None
 
 
+def _provider_fatal(exc: Exception) -> bool:
+    text = str(exc).lower()
+    infrastructure_markers = (
+        "429", "quota", "rate limit", "insufficient_quota", "authentication",
+        "unauthorized", "forbidden", "401", "403", "api key", "не задан",
+        "не настроен", "недоступен",
+    )
+    return any(marker in text for marker in infrastructure_markers)
+
+
 def generate_batch():
     with RunLock():
         _safe("hydrate_local", hydrate_local)
@@ -46,11 +56,18 @@ def generate_batch():
         learn_strategy()
         topics = rank(collect_topics(max(40, ARTICLES_PER_DAY * 12)))
         preferred = recommended_categories()
-        topics = sorted(topics, key=lambda t: (preferred.index(t.get("category", "")) if t.get("category", "") in preferred else 99, -float(t.get("score", 0))))
+        topics = sorted(
+            topics,
+            key=lambda t: (
+                preferred.index(t.get("category", "")) if t.get("category", "") in preferred else 99,
+                -float(t.get("score", 0)),
+            ),
+        )
 
         made = 0
         attempted = 0
         crashed = 0
+        fatal_provider_error = ""
         max_attempts = min(len(topics), max(8, ARTICLES_PER_DAY * 10))
 
         for topic in topics:
@@ -87,16 +104,28 @@ def generate_batch():
                 )
                 notify_article(header, data.get("article_markdown", ""))
                 made += 1
-            except Exception:
+            except Exception as exc:
                 crashed += 1
                 update_topic_status(topic["id"], "error")
                 log.exception("Topic failed: %s", topic.get("title"))
+                if _provider_fatal(exc):
+                    fatal_provider_error = str(exc)
+                    log.error("Stopping batch after provider-level failure: %s", fatal_provider_error)
+                    break
 
         learn_strategy()
         _safe("sync_local", sync_local)
         if made == 0:
-            if crashed >= attempted and attempted > 0:
-                notify(f"⚠️ Авто без переплаты: ни одной статьи не создано — все попытки упали с ошибкой ДО проверки качества (проверь секреты/квоты/доступность AI-провайдеров в логах), попыток: {attempted}.")
+            if fatal_provider_error:
+                notify(
+                    "⚠️ Авто без переплаты: генерация остановлена на уровне AI-провайдера после "
+                    f"{attempted} попытки. Причина: {fatal_provider_error[:900]}"
+                )
+            elif crashed >= attempted and attempted > 0:
+                notify(
+                    "⚠️ Авто без переплаты: ни одной статьи не создано — все попытки упали "
+                    f"с ошибкой ДО проверки качества, попыток: {attempted}."
+                )
             else:
                 notify("⚠️ Авто без переплаты: ни один материал не прошёл professional quality gate. Брак не отправлен и не поставлен в публикацию.")
         return made
