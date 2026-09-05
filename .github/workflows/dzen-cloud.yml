@@ -46,9 +46,9 @@ jobs:
         run: |
           {
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-            echo "DEEPSEEK_MODEL=openrouter/free"
+            echo "DEEPSEEK_MODEL=google/gemma-4-31b-it:free"
             echo "OPENROUTER_MODEL=openrouter/free"
-            echo "OPENROUTER_EDITOR_MODEL=openrouter/free"
+            echo "OPENROUTER_EDITOR_MODEL=nvidia/nemotron-3-super-120b-a12b:free"
             echo "OPENAI_API_KEY=$OPENAI_API_KEY"
             echo "OPENAI_MODEL=gpt-5-mini"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
@@ -81,6 +81,21 @@ jobs:
               raise SystemExit('Missing required Yandex AI secrets: ' + ', '.join(missing))
           print('Yandex AI credentials: present')
           PY
+      - name: Report OpenRouter model availability
+        run: |
+          python - <<'PY'
+          import requests
+          wanted=['google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','openrouter/free']
+          models=requests.get('https://openrouter.ai/api/v1/models',timeout=30).json()['data']
+          by_id={m['id']:m for m in models}
+          for mid in wanted:
+              m=by_id.get(mid)
+              if not m:
+                  print('openrouter_model=',mid,'status=MISSING; code will fall back to next model')
+                  continue
+              p=m.get('pricing') or {}
+              print('openrouter_model=',mid,'status=LIVE','context=',m.get('context_length'),'pricing=',p,'response_format=', 'response_format' in (m.get('supported_parameters') or []))
+          PY
       - name: Initialize Cloudflare D1
         run: python cloud/init_d1.py
       - name: Sync cloud database
@@ -97,7 +112,7 @@ jobs:
           from dotenv import load_dotenv
           load_dotenv('.env')
           from cloud_sync import query
-          result=query("SELECT id,headline,category,status,quality_ok,created_at FROM articles ORDER BY id DESC LIMIT 1") or {}
+          result=query("SELECT * FROM articles ORDER BY id DESC LIMIT 1") or {}
           rows=result.get('results',[])
           print('d1_latest_article=', rows[0] if rows else None)
           PY
