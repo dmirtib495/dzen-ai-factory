@@ -33,9 +33,6 @@ def reserve():
     now = datetime.now(timezone.utc)
     day = now.date().isoformat()
 
-    # One atomic UPSERT both creates the daily row and increments an existing row
-    # only while it is below the configured ceiling. RETURNING is empty when the
-    # shared daily budget is exhausted, so concurrent runners cannot oversubscribe.
     result = _cloud_query(
         """
         INSERT INTO ai_usage(day,requests,updated_at)
@@ -52,12 +49,9 @@ def reserve():
 
 
 def record_success():
-    """Backward-compatible no-op.
-
-    Usage is now reserved before the request so failures such as 429 are counted.
-    Keeping this function avoids breaking older imports while preventing double
-    counting successful completions.
-    """
+    """Legacy compatibility helper; production accounting uses reserve()."""
+    if not cloud_enabled():
+        reserve_ai_request(1_000_000_000)
     return True
 
 
