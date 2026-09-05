@@ -1,4 +1,4 @@
-# acceptance v6: one-article end-to-end after rate-limit and quality-repair fix
+# acceptance v7: one-article end-to-end with preserved source evidence
 name: Production Acceptance Run
 
 on:
