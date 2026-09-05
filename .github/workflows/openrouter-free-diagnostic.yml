@@ -1,0 +1,69 @@
+name: OpenRouter Free Stability Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/openrouter-free-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+      YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+      DEEPSEEK_MODEL: openrouter/free
+      OPENROUTER_MODEL: openrouter/free
+      OPENROUTER_EDITOR_MODEL: openrouter/free
+      ARTICLES_PER_DAY: '1'
+      OPENROUTER_DAILY_LIMIT: '50'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run five real OpenRouter free draft/final chains
+        run: |
+          python - <<'PY'
+          import json
+          from topic_hunter import collect_topics
+          from ai_writer import _openrouter_json, _normalize
+          from editorial_prompts import draft_prompt, final_editor_prompt
+
+          topics = collect_topics(limit=5)
+          if len(topics) < 5:
+              raise SystemExit(f'Need 5 real RSS topics, got {len(topics)}')
+
+          required = {'headline','headlines','category','article_markdown','fact_check','image_prompt','source_urls','commercial_intent'}
+          summary=[]
+          for i, topic in enumerate(topics[:5], 1):
+              print(f'CASE {i} START title={topic.get("title")}')
+              allowed=[topic['link']]
+              draft, req1, actual1 = _openrouter_json(
+                  ['openrouter/free'], draft_prompt(topic, allowed), f'diagnostic-draft-{i}', 0.2, 'Diagnostic/OpenRouter'
+              )
+              missing1=sorted(required-set(draft))
+              print(f'CASE {i} DRAFT actual_model={actual1} requested={req1} valid_json={isinstance(draft,dict)} missing={missing1}')
+              if missing1:
+                  raise SystemExit(f'CASE {i} draft missing required fields: {missing1}')
+              data=_normalize(draft, 'Diagnostic/OpenRouter', actual1)
+              data['source_urls']=allowed
+              final, req2, actual2 = _openrouter_json(
+                  ['openrouter/free'], final_editor_prompt(data), f'diagnostic-final-{i}', 0.08, 'Diagnostic/OpenRouter'
+              )
+              missing2=sorted(required-set(final))
+              print(f'CASE {i} FINAL actual_model={actual2} requested={req2} valid_json={isinstance(final,dict)} missing={missing2}')
+              if missing2:
+                  raise SystemExit(f'CASE {i} final missing required fields: {missing2}')
+              summary.append({'case':i,'title':topic.get('title'),'draft_model':actual1,'final_model':actual2,'draft_ok':not missing1,'final_ok':not missing2})
+          print('DIAGNOSTIC_SUMMARY='+json.dumps(summary,ensure_ascii=False))
+          PY
