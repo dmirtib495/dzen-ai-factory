@@ -59,6 +59,15 @@ def test_openrouter_json_retries_malformed_response_and_records_actual_model(mon
     assert 'ПОВТОР ПОСЛЕ ОШИБКИ ФОРМАТА' in calls[1][1]
 
 
+def test_rss_html_named_entities_become_xml_safe():
+    import topic_hunter
+    raw = '<description>&laquo;тест&raquo; &amp; ok</description>'
+    safe = topic_hunter._xml_safe_named_entities(raw)
+    assert '&laquo;' not in safe and '&raquo;' not in safe
+    assert '&#171;' in safe and '&#187;' in safe
+    assert '&amp;' in safe
+
+
 def test_topic_hunter_accepts_live_shaped_english_auto_item(monkeypatch):
     import topic_hunter
     entry = types.SimpleNamespace(
@@ -69,7 +78,7 @@ def test_topic_hunter_accepts_live_shaped_english_auto_item(monkeypatch):
     )
     feed = types.SimpleNamespace(entries=[entry], feed={'title': 'Test feed'}, bozo=0)
     monkeypatch.setattr(topic_hunter, 'RSS_SOURCES', ['https://example.com/feed.xml'])
-    monkeypatch.setattr(topic_hunter.feedparser, 'parse', lambda _url: feed)
+    monkeypatch.setattr(topic_hunter, '_parse_feed', lambda _url: feed)
     monkeypatch.setattr(topic_hunter, 'topic_seen', lambda _title: False)
     monkeypatch.setattr(topic_hunter, 'add_topic', lambda *args: 123)
     topics = topic_hunter.collect_topics(5)
@@ -87,7 +96,7 @@ def test_topic_hunter_skips_malformed_entry_without_crashing(monkeypatch):
     good = types.SimpleNamespace(title='Toyota car maintenance review', link='https://example.com/good', summary='buy cost repair', published_parsed=None)
     feed = types.SimpleNamespace(entries=[bad, good], feed={'title': 'Test feed'}, bozo=1, bozo_exception=ValueError('bad xml'))
     monkeypatch.setattr(topic_hunter, 'RSS_SOURCES', ['https://example.com/feed.xml'])
-    monkeypatch.setattr(topic_hunter.feedparser, 'parse', lambda _url: feed)
+    monkeypatch.setattr(topic_hunter, '_parse_feed', lambda _url: feed)
     monkeypatch.setattr(topic_hunter, 'topic_seen', lambda _title: False)
     monkeypatch.setattr(topic_hunter, 'add_topic', lambda *args: 321)
     topics = topic_hunter.collect_topics(5)
