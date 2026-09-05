@@ -32,4 +32,5 @@ jobs:
               raise SystemExit(f'Expected at least 10 article trends, got {len(trends)}')
           if not all(x.url.startswith('https://dzen.ru/a/') for x in trends):
               raise SystemExit('Non-article URL leaked into trend list')
+          print('DZEN_TREND_PARSER_OK')
           PY
