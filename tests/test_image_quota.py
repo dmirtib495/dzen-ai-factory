@@ -15,7 +15,10 @@ def test_image_quota_reserves_atomically_in_d1(monkeypatch):
     assert 'resource_usage.used + excluded.used <= ?' in captured['sql']
     assert captured['params'][1] == image_quota.WORKERS_AI_RESOURCE
     assert captured['params'][2] == 172.8
-    assert captured['params'][-1] == 10_000.0
+    assert captured['params'][-1] == image_quota.WORKERS_AI_DAILY_NEURON_LIMIT
+    assert image_quota.WORKERS_AI_DAILY_GENERATION_LIMIT == 34
+    assert round(image_quota.WORKERS_AI_DAILY_NEURON_LIMIT, 1) == 5875.2
+    assert image_quota.WORKERS_AI_DAILY_NEURON_LIMIT < image_quota.WORKERS_AI_FREE_DAILY_NEURON_LIMIT
 
 
 def test_image_quota_refuses_when_shared_budget_is_exhausted(monkeypatch):
