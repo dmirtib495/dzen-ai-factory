@@ -1,4 +1,4 @@
-# qa rebuild: inline-layout-v5
+# final delivery: sample-article-8
 name: Rebuild Approved Sample Package
 
 on:
@@ -80,8 +80,8 @@ jobs:
               f.extractall('source-artifact')
           print('DOWNLOADED_ARTIFACT_ID',a['id'],'SIZE',a.get('size_in_bytes'))
           PY
-      - name: Rebuild Word and ZIP without Telegram send
-        run: python finalize_article_package.py --article-id 8 --batch-id 1 --source-root source-artifact
+      - name: Rebuild and send final Word/ZIP to Telegram
+        run: python finalize_article_package.py --article-id 8 --batch-id 1 --source-root source-artifact --send-article-zip
       - name: Verify package structure
         run: |
           python - <<'PY'
@@ -89,6 +89,7 @@ jobs:
           from pathlib import Path
           p=json.loads(Path('data/current_package.json').read_text(encoding='utf-8'))
           assert p['image_count']==5, p
+          assert p.get('telegram_message_id'), p
           z=Path(p['zip']); d=Path(p['docx'])
           assert z.is_file() and z.stat().st_size>0
           assert d.is_file() and d.stat().st_size>0
@@ -97,13 +98,13 @@ jobs:
           jpgs=[n for n in names if n.startswith('images/')]
           assert len(jpgs)==5, names
           assert 'article.docx' in names
-          print('SAMPLE_PACKAGE_OK',p)
+          print('FINAL_SAMPLE_PACKAGE_OK',p)
           print('ZIP_FILES',names)
           PY
-      - name: Upload rebuilt sample for QA
+      - name: Upload delivered sample artifact
         uses: actions/upload-artifact@v4
         with:
-          name: approved-sample-article-8-batch-1-v5
+          name: approved-sample-article-8-delivered
           path: |
             data/packages/
             data/current_package.json
