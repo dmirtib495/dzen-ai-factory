@@ -48,7 +48,7 @@ jobs:
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
             echo "DEEPSEEK_MODEL=openrouter/free"
             echo "OPENROUTER_MODEL=openrouter/free"
-            echo "OPENROUTER_EDITOR_MODEL=openai/gpt-oss-20b:free"
+            echo "OPENROUTER_EDITOR_MODEL=openrouter/free"
             echo "OPENAI_API_KEY=$OPENAI_API_KEY"
             echo "OPENAI_MODEL=gpt-5-mini"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
