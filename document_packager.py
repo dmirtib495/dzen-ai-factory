@@ -29,27 +29,130 @@ def _validate_image_count(images: list[Path]) -> None:
         )
 
 
-def _add_markdown(document: Document, markdown: str) -> None:
+def _add_markdown_line(document: Document, raw: str) -> None:
+    line = (raw or "").strip()
+    if not line:
+        document.add_paragraph()
+        return
+    if line.startswith("## "):
+        document.add_heading(line[3:].strip(), level=2)
+        return
+    if line.startswith("### "):
+        document.add_heading(line[4:].strip(), level=3)
+        return
+    if re.match(r"^\d+\.\s+", line):
+        p = document.add_paragraph(style="List Number")
+        p.add_run(re.sub(r"^\d+\.\s+", "", line))
+        return
+    if line.startswith("- "):
+        p = document.add_paragraph(style="List Bullet")
+        p.add_run(line[2:].strip())
+        return
+    document.add_paragraph(line)
+
+
+def _content_lines(markdown: str) -> list[str]:
+    """Collapse repeated blanks while retaining headings/list items as layout blocks."""
+    out: list[str] = []
+    blank = False
     for raw in (markdown or "").splitlines():
         line = raw.strip()
         if not line:
-            document.add_paragraph()
+            if out and not blank:
+                out.append("")
+            blank = True
             continue
-        if line.startswith("## "):
-            document.add_heading(line[3:].strip(), level=2)
-            continue
-        if line.startswith("### "):
-            document.add_heading(line[4:].strip(), level=3)
-            continue
-        if re.match(r"^\d+\.\s+", line):
-            p = document.add_paragraph(style="List Number")
-            p.add_run(re.sub(r"^\d+\.\s+", "", line))
-            continue
-        if line.startswith("- "):
-            p = document.add_paragraph(style="List Bullet")
-            p.add_run(line[2:].strip())
-            continue
-        document.add_paragraph(line)
+        out.append(line)
+        blank = False
+    while out and not out[-1]:
+        out.pop()
+    return out
+
+
+def _paragraph_indices(lines: list[str]) -> list[int]:
+    return [
+        i
+        for i, line in enumerate(lines)
+        if line and not line.startswith(("## ", "### ", "- ")) and not re.match(r"^\d+\.\s+", line)
+    ]
+
+
+def _nearest_paragraph_at_or_after(paragraphs: list[int], target: int, used: set[int]) -> int:
+    for idx in paragraphs:
+        if idx >= target and idx not in used:
+            return idx
+    for idx in reversed(paragraphs):
+        if idx not in used:
+            return idx
+    return target
+
+
+def _image_anchor_indices(lines: list[str], count: int) -> list[int]:
+    """Choose stable reading-flow anchors, with the interior image near an interior section when possible."""
+    paragraphs = _paragraph_indices(lines)
+    if not paragraphs:
+        return [max(0, len(lines) - 1)] * count
+
+    # Spread illustrations through the story rather than collecting them at the end.
+    ratios_by_count = {
+        3: (0.18, 0.52, 0.84),
+        4: (0.15, 0.38, 0.62, 0.86),
+        5: (0.13, 0.32, 0.51, 0.70, 0.88),
+    }
+    ratios = ratios_by_count[count]
+    used: set[int] = set()
+    anchors: list[int] = []
+    last = paragraphs[-1]
+
+    for ratio in ratios:
+        target = round(last * ratio)
+        anchor = _nearest_paragraph_at_or_after(paragraphs, target, used)
+        used.add(anchor)
+        anchors.append(anchor)
+
+    # Slot 4 is the interior/dashboard image. If the article contains a cabin/equipment
+    # section, move this illustration close to the first paragraph under that section.
+    if count >= 4:
+        interior_keywords = (
+            "салон", "интерьер", "оснащ", "комплектац", "эргоном", "мультимед", "оборудован"
+        )
+        for i, line in enumerate(lines):
+            low = line.lower()
+            if line.startswith(("## ", "### ")) and any(k in low for k in interior_keywords):
+                candidate = _nearest_paragraph_at_or_after(paragraphs, i + 1, set(anchors[:3]))
+                anchors[3] = candidate
+                break
+
+    # Keep visual order monotonic. Duplicate anchors are shifted to the next available paragraph.
+    normalized: list[int] = []
+    floor = -1
+    for anchor in anchors:
+        candidates = [p for p in paragraphs if p > floor and p >= anchor]
+        if not candidates:
+            candidates = [p for p in paragraphs if p > floor]
+        chosen = candidates[0] if candidates else max(floor, anchor)
+        normalized.append(chosen)
+        floor = chosen
+    return normalized
+
+
+def _add_image(document: Document, image: Path, idx: int, caption: str) -> None:
+    # Keep square FLUX images comfortably inside the printable area and leave room for a caption.
+    p = document.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(5)
+    p.paragraph_format.space_after = Pt(2)
+    p.add_run().add_picture(str(image), width=Inches(5.75))
+
+    text = (caption or "").strip()
+    if text:
+        cp = document.add_paragraph(f"Рис. {idx}. {text}")
+        cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cp.paragraph_format.space_before = Pt(0)
+        cp.paragraph_format.space_after = Pt(8)
+        for run in cp.runs:
+            run.italic = True
+            run.font.size = Pt(9)
 
 
 def build_article_docx(
@@ -75,38 +178,39 @@ def build_article_docx(
 
     doc = Document()
     section = doc.sections[0]
-    section.top_margin = Inches(0.7)
-    section.bottom_margin = Inches(0.7)
+    section.top_margin = Inches(0.65)
+    section.bottom_margin = Inches(0.65)
     section.left_margin = Inches(0.8)
     section.right_margin = Inches(0.8)
 
     styles = doc.styles
     styles["Normal"].font.name = "Arial"
     styles["Normal"].font.size = Pt(11)
+    styles["Normal"].paragraph_format.space_after = Pt(6)
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_after = Pt(10)
     run = title.add_run((headline or "").strip())
     run.bold = True
     run.font.size = Pt(18)
 
-    doc.add_paragraph()
-    _add_markdown(doc, article_markdown)
+    lines = _content_lines(article_markdown)
+    anchors = _image_anchor_indices(lines, len(images))
+    images_after: dict[int, list[int]] = {}
+    for image_idx, anchor in enumerate(anchors):
+        images_after.setdefault(anchor, []).append(image_idx)
 
-    doc.add_page_break()
-    doc.add_heading("Иллюстрации", level=2)
+    for line_idx, line in enumerate(lines):
+        _add_markdown_line(doc, line)
+        for image_idx in images_after.get(line_idx, []):
+            _add_image(doc, images[image_idx], image_idx + 1, caption_list[image_idx])
 
-    for idx, image in enumerate(images, 1):
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p.add_run().add_picture(str(image), width=Inches(6.3))
-        caption = (caption_list[idx - 1] or "").strip()
-        if caption:
-            cp = doc.add_paragraph(f"Рис. {idx}. {caption}")
-            cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for r in cp.runs:
-                r.italic = True
-                r.font.size = Pt(9)
+    # Extremely short/malformed markdown may leave an anchor beyond the available lines.
+    inserted = {i for indexes in images_after.values() for i in indexes}
+    for image_idx, image in enumerate(images):
+        if image_idx not in inserted:
+            _add_image(doc, image, image_idx + 1, caption_list[image_idx])
 
     doc.save(output)
     if not output.is_file() or output.stat().st_size <= 0:
