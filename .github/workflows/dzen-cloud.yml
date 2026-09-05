@@ -47,6 +47,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
         run: |
@@ -63,6 +64,7 @@ jobs:
             echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
             echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
             echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
+            echo "CLOUDFLARE_AI_API_TOKEN=$CLOUDFLARE_AI_API_TOKEN"
             echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
             echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
             echo "ARTICLES_PER_DAY=1"
@@ -87,6 +89,17 @@ jobs:
               raise SystemExit('Missing required Yandex AI secrets: ' + ', '.join(missing))
           print('Yandex AI credentials: present')
           PY
+      - name: Require dedicated Workers AI credentials
+        run: |
+          python - <<'PY'
+          import os
+          from dotenv import load_dotenv
+          load_dotenv('.env')
+          missing = [k for k in ('CLOUDFLARE_AI_API_TOKEN','CLOUDFLARE_ACCOUNT_ID') if not os.getenv(k,'').strip()]
+          if missing:
+              raise SystemExit('Missing Workers AI secrets: ' + ', '.join(missing))
+          print('Workers AI credentials: present')
+          PY
       - name: Report OpenRouter model availability
         run: |
           python - <<'PY'
@@ -106,7 +119,7 @@ jobs:
         run: python cloud/init_d1.py
       - name: Sync cloud database
         run: python cloud_sync.py
-      - name: Generate article
+      - name: Generate article and review image set
         run: python main.py --once
       - name: Sync results to Cloudflare D1
         if: always()
