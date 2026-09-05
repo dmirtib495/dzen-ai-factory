@@ -23,7 +23,10 @@ elif args.once:
     errors=validate()
     if errors: raise SystemExit('Конфигурация: '+'; '.join(errors))
     from pipeline import generate_batch
-    print('Создано материалов:',generate_batch())
+    generated=generate_batch()
+    print('Создано материалов:', generated)
+    if generated < 1:
+        raise SystemExit('Production run не создал ни одной статьи, прошедшей quality gate')
 else:
     errors=validate()
     if errors: raise SystemExit('Конфигурация: '+'; '.join(errors))
