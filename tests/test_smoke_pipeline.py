@@ -1,3 +1,4 @@
+import json
 import types
 
 import pytest
@@ -57,6 +58,164 @@ def test_openrouter_json_retries_malformed_response_and_records_actual_model(mon
     assert actual == 'free/model-b'
     assert len(calls) == 2
     assert 'ПОВТОР ПОСЛЕ ОШИБКИ ФОРМАТА' in calls[1][1]
+
+
+def _publication_grade_data():
+    sections = []
+    names = [
+        'Что проверить до осмотра',
+        'Кузов и следы ремонта',
+        'Салон и электрика',
+        'Проверка на ходу',
+        'Практический чек-лист',
+        'Где можно ошибиться или переплатить',
+    ]
+    for i, name in enumerate(names):
+        words = ' '.join(f'проверка{i}_{j}' for j in range(155))
+        prefix = 'Практический чек-лист и риск расходов. ' if i == 4 else ('Риск переплаты требует проверки. ' if i == 5 else 'Проверяйте состояние последовательно. ')
+        sections.append(f'## {name}\n\n{prefix}{words}.')
+    return {
+        'headline': 'Как проверить подержанный автомобиль перед покупкой без лишней переплаты',
+        'headlines': ['Как проверить подержанный автомобиль перед покупкой без лишней переплаты'],
+        'category': 'Экономия',
+        'article_markdown': '\n\n'.join(sections),
+        'fact_check': [
+            'Проверить: состояние кузова требует отдельного осмотра',
+            'Проверить: работу электрики нужно оценивать до сделки',
+            'Проверить: тест-драйв помогает выявить заметные отклонения',
+        ],
+        'image_prompt': 'Photorealistic editorial automotive inspection scene in natural daylight, no text or logos.',
+        'source_urls': ['https://example.com/source'],
+        'commercial_intent': 4,
+        'ai_stages': ['FixedFree/OpenRouter:model', 'YandexGPT:yandexgpt/latest', 'OpenAI/OpenRouter:model'],
+    }
+
+
+def test_quality_audit_uses_yandex_only_for_openrouter_daily_free_limit(monkeypatch, caplog):
+    import ai_writer
+
+    data = _publication_grade_data()
+    monkeypatch.setattr(ai_writer, 'YANDEX_API_KEY', 'test-yandex-key')
+    monkeypatch.setattr(ai_writer, 'YANDEX_FOLDER_ID', 'test-folder')
+    monkeypatch.setattr(ai_writer, 'YANDEX_MODEL', 'yandexgpt/latest')
+    monkeypatch.setattr(
+        ai_writer,
+        '_openrouter_json',
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError('Error code: 429 - Rate limit exceeded: free-models-per-day; limit_source=openrouter_free_tier_daily')
+        ),
+    )
+
+    captured = {}
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {
+                'result': {
+                    'alternatives': [{
+                        'message': {
+                            'text': json.dumps({
+                                'verdict': 'PASS',
+                                'total_score': 96,
+                                'scores': {'facts': 29, 'utility': 20, 'editorial': 18, 'structure': 15, 'ethics': 14},
+                                'blocking_issues': [],
+                                'improvements': [],
+                                'fact_risks': [],
+                                'strengths': ['Практическая структура'],
+                            }, ensure_ascii=False)
+                        }
+                    }]
+                }
+            }
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured['url'] = url
+        captured['body'] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(ai_writer.requests, 'post', fake_post)
+    audit = ai_writer._quality_audit(data)
+
+    assert audit['verdict'] == 'PASS'
+    assert audit['total_score'] == 96
+    assert audit['blocking_issues'] == []
+    assert audit['auditor_provider'] == 'QualityAudit/YandexFallback'
+    assert audit['auditor_model'] == 'yandexgpt/latest'
+    assert data['ai_quality_audit'] == audit
+    assert any('QualityAudit/YandexFallback' in stage for stage in data['ai_stages'])
+    prompt = captured['body']['messages'][1]['text']
+    assert 'Ты НЕ участвовал в создании или редактуре этого текста' in prompt
+    assert 'FixedFree/OpenRouter:model' not in prompt
+    assert 'YandexGPT:yandexgpt/latest' not in prompt
+    assert 'QUALITY_AUDIT_FALLBACK' in caplog.text
+
+
+def test_generate_article_completes_with_yandex_audit_fallback(monkeypatch):
+    import ai_writer
+
+    topic = {
+        'title': 'Проверка подержанного автомобиля',
+        'source': 'Test RSS',
+        'link': 'https://example.com/source',
+        'summary': 'Практический материал о проверке автомобиля перед покупкой.',
+    }
+    base = _publication_grade_data()
+    monkeypatch.setattr(ai_writer, 'YANDEX_API_KEY', 'test-yandex-key')
+    monkeypatch.setattr(ai_writer, 'YANDEX_FOLDER_ID', 'test-folder')
+    monkeypatch.setattr(ai_writer, 'YANDEX_MODEL', 'yandexgpt/latest')
+    monkeypatch.setattr(ai_writer, '_draft', lambda _topic: dict(base))
+    monkeypatch.setattr(ai_writer, '_yandex_edit', lambda data: dict(data))
+    monkeypatch.setattr(ai_writer, '_final_edit', lambda data, repair_notes='': dict(data))
+    monkeypatch.setattr(
+        ai_writer,
+        '_openrouter_json',
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError('429 free-models-per-day openrouter_free_tier_daily')
+        ),
+    )
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {'result': {'alternatives': [{'message': {'text': json.dumps({
+                'verdict': 'PASS',
+                'total_score': 95,
+                'scores': {'facts': 28, 'utility': 20, 'editorial': 18, 'structure': 15, 'ethics': 14},
+                'blocking_issues': [],
+                'improvements': [],
+                'fact_risks': [],
+                'strengths': ['Готово к публикации'],
+            }, ensure_ascii=False)}}]}}
+
+    monkeypatch.setattr(ai_writer.requests, 'post', lambda *a, **k: FakeResponse())
+    result = ai_writer.generate_article(topic)
+    quality = ai_writer.check_article(result, require_ai_audit=True)
+
+    assert quality['ok'] is True
+    assert quality['score'] >= 90
+    assert quality['problems'] == []
+    assert result['ai_quality_audit']['verdict'] == 'PASS'
+    assert result['ai_quality_audit']['auditor_provider'] == 'QualityAudit/YandexFallback'
+
+
+def test_quality_audit_does_not_fallback_on_unrelated_429(monkeypatch):
+    import ai_writer
+
+    data = _publication_grade_data()
+    monkeypatch.setattr(
+        ai_writer,
+        '_openrouter_json',
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError('Error code: 429 temporary provider rate limit')),
+    )
+    monkeypatch.setattr(
+        ai_writer,
+        '_yandex_quality_audit',
+        lambda _data: (_ for _ in ()).throw(AssertionError('Yandex fallback must not run')),
+    )
+    with pytest.raises(RuntimeError, match='temporary provider rate limit'):
+        ai_writer._quality_audit(data)
 
 
 def test_rss_html_named_entities_become_xml_safe():
