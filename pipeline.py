@@ -97,7 +97,7 @@ def generate_batch():
                     continue
 
                 # Keep the local cover only for the legacy publication queue.
-                # The final DOCX package uses the five user-approved FLUX images.
+                # The final DOCX package uses the user-approved FLUX image set.
                 image = make_cover(chosen, data.get("category", "Авто"))
                 path = save_to_queue(data, image)
                 aid = add_article(topic["id"], chosen, path, True, "", data.get("category", ""), image, "queued")
@@ -117,7 +117,8 @@ def generate_batch():
                     f"Quality gate: {quality['score']}/100\nНезависимый AI-аудит: {audit_score}/100\n"
                     f"Слов: {quality['words']}\nПодзаголовков: {quality.get('headings', '—')}\n"
                     f"AI-цепочка: {stage_text}\nИсточников: {len(data.get('source_urls', []))}\nID: {aid}\n\n"
-                    "После текста придёт одно превью из 5 изображений для пакетного подтверждения."
+                    "После текста придёт одно превью набора из 3–5 изображений. Цель — 5; "
+                    "уменьшение допускается только при остатке бесплатного лимита Workers AI."
                 )
                 message_ids = notify_article(header, data.get("article_markdown", ""))
                 if not message_ids:
@@ -135,11 +136,18 @@ def generate_batch():
                         f"⚠️ Статья #{aid} прошла quality gate, но набор изображений сейчас не создан. "
                         "Текст сохранён; изображения можно повторить после восстановления/сброса дневного бюджета."
                     )
+                else:
+                    log.info(
+                        "IMAGE_SET_READY article_id=%s batch_id=%s image_count=%s",
+                        aid, image_manifest.get('batch_id'), image_manifest.get('image_count'),
+                    )
 
                 log.info(
-                    "ARTICLE_ACCEPTED id=%s headline=%r quality_score=%s ai_audit_score=%s telegram_message_ids=%s image_batch=%s path=%s",
+                    "ARTICLE_ACCEPTED id=%s headline=%r quality_score=%s ai_audit_score=%s telegram_message_ids=%s image_batch=%s image_count=%s path=%s",
                     aid, chosen, quality.get("score"), audit_score, message_ids,
-                    image_manifest.get('batch_id') if image_manifest else None, path,
+                    image_manifest.get('batch_id') if image_manifest else None,
+                    image_manifest.get('image_count') if image_manifest else None,
+                    path,
                 )
                 made += 1
             except Exception as exc:
