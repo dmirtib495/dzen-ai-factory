@@ -13,23 +13,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect dzen.guru post fields
+      - name: Inspect dzen.guru post-table JavaScript
         run: |
           python - <<'PY'
-          import html, re, requests
-          text=requests.get(
-            'https://dzen.guru/channels/zr.ru/posts',
-            headers={'User-Agent':'Mozilla/5.0','Accept-Language':'ru-RU,ru;q=0.9'},
-            timeout=30,
-          ).text
-          # Unescape the Next.js flight stream one level for readable diagnostics.
-          decoded=html.unescape(text).replace('\\"','"').replace('\\n',' ')
-          print('STATUS_LEN',len(text),len(decoded))
-          for key in ['views','reach','title','publishedAt','publication','externalUrl','dzen.ru']:
-            hits=list(re.finditer(key,decoded,re.I))
-            print('\nKEY',key,'HITS',len(hits))
-            for m in hits[:12]:
-              a=max(0,m.start()-350); b=min(len(decoded),m.end()+700)
-              snippet=re.sub(r'\s+',' ',decoded[a:b])
-              print('CTX',snippet[:1200])
+          import re, requests
+          base='https://dzen.guru'
+          page=requests.get(base+'/channels/zr.ru/posts',headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
+          scripts=re.findall(r'<script[^>]+src=["\']([^"\']+)',page,re.I)
+          print('SCRIPTS',len(scripts))
+          needles=['supabase','channel_posts','posts','views','reach','publication','publisher','slug','select(','from(']
+          for src in scripts:
+            if not src.startswith('/_next/static/chunks/'):
+              continue
+            try:
+              text=requests.get(base+src,headers={'User-Agent':'Mozilla/5.0'},timeout=30).text
+            except Exception:
+              continue
+            low=text.lower()
+            if not any(n in low for n in ['supabase','channelposts','poststable','views30days','reachperpublication']):
+              continue
+            print('\nCHUNK',src,'LEN',len(text))
+            for needle in needles:
+              hits=[m.start() for m in re.finditer(re.escape(needle.lower()),low)]
+              if not hits: continue
+              print(' NEEDLE',needle,'HITS',len(hits))
+              for pos in hits[:8]:
+                snippet=re.sub(r'\s+',' ',text[max(0,pos-450):pos+900])
+                print('  CTX',snippet[:1400])
           PY
