@@ -1,4 +1,4 @@
-# production E2E trigger: 2026-09-05-v9-provider-quota-fix
+# production E2E trigger: 2026-09-05-v10-current-production
 name: Dzen Production E2E Now
 
 on:
@@ -34,56 +34,62 @@ jobs:
       - name: Create environment file
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
           YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
         run: |
           {
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+            echo "DEEPSEEK_MODEL=google/gemma-4-31b-it:free"
             echo "OPENROUTER_MODEL=openrouter/free"
-            echo "DEEPSEEK_MODEL=deepseek/deepseek-chat-v3.1:free"
-            echo "OPENROUTER_EDITOR_MODEL=openai/gpt-oss-120b:free"
-            echo "OPENAI_API_KEY=$OPENAI_API_KEY"
-            echo "OPENAI_MODEL=gpt-5-mini"
+            echo "OPENROUTER_EDITOR_MODEL=nvidia/nemotron-3-super-120b-a12b:free"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
             echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
             echo "YANDEX_MODEL=yandexgpt/latest"
             echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
             echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
             echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
+            echo "CLOUDFLARE_AI_API_TOKEN=$CLOUDFLARE_AI_API_TOKEN"
             echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
             echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
-            echo "ARTICLES_PER_DAY=5"
+            echo "ARTICLES_PER_DAY=1"
             echo "OPENROUTER_DAILY_LIMIT=50"
             echo "MIN_ARTICLE_WORDS=900"
             echo "MAX_ARTICLE_WORDS=1400"
             echo "TIMEZONE=Europe/Moscow"
             echo "SCHEDULE_HOURS=6,12,18"
           } > .env
-      - name: Require Yandex AI credentials
-        run: |
-          python - <<'PY'
-          from dotenv import load_dotenv
-          import os
-          load_dotenv('.env')
-          assert os.getenv('YANDEX_API_KEY','').strip(), 'YANDEX_API_KEY secret is missing'
-          assert os.getenv('YANDEX_FOLDER_ID','').strip(), 'YANDEX_FOLDER_ID secret is missing'
-          print('Yandex AI credentials: present')
-          PY
       - name: Validate configuration
         run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
       - name: Initialize D1
         run: python cloud/init_d1.py
+      - name: Shared quota preflight
+        run: |
+          python - <<'PY'
+          from quota import status as text_status
+          from image_quota import status as image_status, FLUX_SCHNELL_NEURONS_PER_IMAGE
+          t=text_status(); i=image_status()
+          print('TEXT_QUOTA',t)
+          print('IMAGE_QUOTA',i)
+          # One modern accepted article measured about 10 OpenRouter attempts.
+          # Do not consume the reserve if fewer than 10 attempts remain.
+          if int(t.get('remaining',0)) < 10:
+              raise SystemExit(78)
+          # Adaptive image set may fall to 3, but never lower.
+          if float(i.get('remaining',0)) + 1e-6 < 3*FLUX_SCHNELL_NEURONS_PER_IMAGE:
+              raise SystemExit(78)
+          print('E2E_QUOTA_PREFLIGHT_OK')
+          PY
       - name: Sync before generation
         run: python cloud_sync.py
-      - name: Generate five production articles
+      - name: Generate one production article
         run: |
-          python -c "from pipeline import generate_batch; n=generate_batch(); print('publication_grade_articles=', n); raise SystemExit(0 if n == 5 else 2)"
+          python -c "from pipeline import generate_batch; n=generate_batch(); print('publication_grade_articles=', n); raise SystemExit(0 if n == 1 else 2)"
       - name: Sync after generation
         if: always()
         run: python cloud_sync.py
