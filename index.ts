@@ -52,12 +52,22 @@ function mainMenu() {
 
 function articleKeyboard(id: number, status: string) {
   const rows: any[] = [[{ text: "📝 Читать статью", callback_data: `text:${id}` }]];
-  if (status === "queued" || status === "needs_review") rows.push([
-    { text: "✅ Одобрить", callback_data: `approve:${id}` },
-    { text: "❌ Отклонить", callback_data: `reject:${id}` },
-  ]);
+  if (status === "queued" || status === "needs_review") {
+    rows.push([
+      { text: "✅ Одобрить", callback_data: `approve:${id}` },
+      { text: "❌ Отклонить", callback_data: `reject:${id}` },
+    ]);
+    rows.push([{ text: "🗑 Удалить из очереди", callback_data: `delete:${id}` }]);
+  }
   rows.push([{ text: "⬅️ К очереди", callback_data: "queue" }, { text: "🏠 Меню", callback_data: "menu" }]);
   return { inline_keyboard: rows };
+}
+
+function deleteConfirmKeyboard(id: number) {
+  return { inline_keyboard: [
+    [{ text: "🗑 Да, удалить", callback_data: `delete_confirm:${id}` }],
+    [{ text: "Отмена", callback_data: `delete_cancel:${id}` }, { text: "⬅️ К очереди", callback_data: "queue" }],
+  ] };
 }
 
 async function queueView(env: Env) {
@@ -224,6 +234,37 @@ async function handleImageSetDecision(env: Env, chat: string, batchId: number, a
   return send(env,chat,`✅ Набор #${batchId} принят. Запускаю DOCX/ZIP для статьи #${batch.article_id}.`,mainMenu());
 }
 
+async function handleDeleteArticle(env: Env, chat: string, id: number, messageId?: number) {
+  const a = await getArticle(env,id);
+  if (!a) return send(env,chat,"Материал не найден.",mainMenu());
+  if (a.status !== "queued" && a.status !== "needs_review") {
+    return send(env,chat,`Материал #${id} уже не находится в очереди. Текущий статус: ${a.status}.`,mainMenu());
+  }
+  return send(env,chat,
+    `⚠️ Удалить материал #${id} из очереди?\n\n${a.headline}\n\nОн исчезнет из очереди, а ожидающие подтверждения изображения для него будут отменены.`,
+    deleteConfirmKeyboard(id));
+}
+
+async function confirmDeleteArticle(env: Env, chat: string, id: number, messageId?: number) {
+  const a = await getArticle(env,id);
+  if (!a) return send(env,chat,"Материал не найден.",mainMenu());
+  if (a.status !== "queued" && a.status !== "needs_review") {
+    await clearInlineKeyboard(env,chat,messageId);
+    return send(env,chat,`Материал #${id} уже не находится в очереди. Текущий статус: ${a.status}.`,mainMenu());
+  }
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    "UPDATE articles SET status='deleted',updated_at=? WHERE id=? AND status IN ('queued','needs_review')"
+  ).bind(now,id).run();
+  if (!result.meta?.changes) return send(env,chat,"Материал уже был обработан другим действием.",mainMenu());
+  await env.DB.prepare(
+    "UPDATE image_batches SET status='rejected',updated_at=? WHERE article_id=? AND status='pending_review'"
+  ).bind(now,id).run();
+  await clearInlineKeyboard(env,chat,messageId);
+  const q = await queueView(env);
+  return send(env,chat,`🗑 Материал #${id} удалён из очереди.\n\n${a.headline}`,q.keyboard);
+}
+
 async function handleCallback(env: Env, chat: string, data: string, callbackId: string, messageId?: number) {
   await tg(env,"answerCallbackQuery",{callback_query_id:callbackId});
 
@@ -266,6 +307,16 @@ async function handleCallback(env: Env, chat: string, data: string, callbackId: 
     await env.DB.prepare("UPDATE articles SET status='rejected',updated_at=? WHERE id=?").bind(new Date().toISOString(),id).run();
     const a=await getArticle(env,id); return send(env,chat,a?`❌ Материал #${id} отклонён.\n\n${a.headline}`:"Материал не найден.",mainMenu());
   }
+  const requestDelete=/^delete:(\d+)$/.exec(data);
+  if (requestDelete) return handleDeleteArticle(env,chat,Number(requestDelete[1]),messageId);
+  const confirmDelete=/^delete_confirm:(\d+)$/.exec(data);
+  if (confirmDelete) return confirmDeleteArticle(env,chat,Number(confirmDelete[1]),messageId);
+  const cancelDelete=/^delete_cancel:(\d+)$/.exec(data);
+  if (cancelDelete) {
+    const a=await getArticle(env,Number(cancelDelete[1]));
+    await clearInlineKeyboard(env,chat,messageId);
+    return send(env,chat,a?`Удаление отменено.\n\n${a.headline}`:"Удаление отменено.",a?articleKeyboard(a.id,a.status):mainMenu());
+  }
   const textMatch=/^text:(\d+)$/.exec(data);
   if (textMatch) {
     const a=await getArticle(env,Number(textMatch[1]));
@@ -305,7 +356,7 @@ export default {
       telegram_chat_configured:Boolean(env.TELEGRAM_CHAT_ID),
       control_secret_configured:Boolean(env.CONTROL_SECRET),
       workflow_trigger_configured:Boolean(env.WORKFLOW_TRIGGER_TOKEN),
-      d1_configured:Boolean(env.DB), image_set_approval:true, topic_approval:true,
+      d1_configured:Boolean(env.DB), image_set_approval:true, topic_approval:true, queue_delete:true,
     });
     if (url.pathname==="/telegram/webhook" && req.method==="POST") {
       try { const u=await req.json<TgUpdate>(); await handleUpdate(env,u); return json({ok:true}); }
