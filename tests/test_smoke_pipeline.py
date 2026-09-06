@@ -362,3 +362,51 @@ def test_source_free_custom_topic_drops_only_unsupported_numeric_sentences():
     assert 'Перед поездкой' in result['article_markdown']
     assert 'Оставляйте запас' in result['article_markdown']
     assert 'Deterministic:unsupported-number-cleanup' in result['ai_stages']
+
+
+def test_reader_phrase_nuzhno_proverit_is_not_an_editorial_marker():
+    import ai_writer
+
+    data = _publication_grade_data()
+    data['article_markdown'] += '\n\nПеред сделкой нужно проверить документы и состояние автомобиля.'
+    result = ai_writer.check_article(data, require_ai_audit=False)
+
+    assert not any('редакционные пометки' in problem for problem in result['problems'])
+
+
+def test_source_free_final_rewrite_requests_coherent_full_article(monkeypatch):
+    import ai_writer
+
+    topic = {
+        'title': 'Электромобиль в Москве',
+        'summary': 'Город, трасса и зимняя эксплуатация',
+        'source': 'Тема, предложенная пользователем',
+        'link': 'https://yandex.ru/search/?text=ev',
+    }
+    data = {
+        'headline': 'Исходный материал об эксплуатации электромобиля в большом городе',
+        'headlines': ['Исходный материал об эксплуатации электромобиля в большом городе'],
+        'category': 'Авто-технологии',
+        'article_markdown': 'Черновик.',
+        'fact_check': ['Проверить: общий принцип'],
+        'image_prompt': 'Photorealistic electric car in Moscow winter daylight, no text.',
+        'source_urls': [topic['link']],
+        'commercial_intent': 3,
+        'ai_stages': [],
+        'source_evidence': ai_writer._source_evidence(topic),
+    }
+    captured = {}
+
+    def fake_yandex(prompt, role, temperature=0.12, max_tokens=9000):
+        captured['prompt'] = prompt
+        captured['role'] = role
+        return dict(data)
+
+    monkeypatch.setattr(ai_writer, '_yandex_json', fake_yandex)
+    result = ai_writer._source_free_final_rewrite(data, topic)
+
+    assert 'ровно семь самостоятельных подзаголовков' in captured['prompt']
+    assert 'никаких цифр' in captured['prompt']
+    assert captured['role'] == 'Независимый редактор связности'
+    assert result['source_urls'] == [topic['link']]
+    assert any('IndependentCoherenceEditor' in stage for stage in result['ai_stages'])
