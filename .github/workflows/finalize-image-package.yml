@@ -14,8 +14,9 @@ on:
         description: 'Workflow run containing the image artifact'
         required: true
       artifact_name:
-        description: 'Artifact that contains the approved 3-5 images'
-        required: true
+        description: 'Original artifact hint (kept for callback compatibility)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -46,10 +47,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Initialize D1 schema
         run: python cloud/init_d1.py
-      - name: Download approved image artifact
+      - name: Download source-run artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
           path: source-artifact
           run-id: ${{ inputs.source_run_id }}
           github-token: ${{ github.token }}
