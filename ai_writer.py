@@ -492,7 +492,7 @@ def _repair(data: dict, topic: dict) -> dict:
 
 
 def _russian_word_count(text: str) -> int:
-    return len(re.findall(r"[A-Za-zА-Яа-яЁё0-9]+(?:[-–][A-Za-zА-Яа-яЁё0-9]+)*", text or ""))
+    return len(re.findall(r"\b[\wЁёА-Яа-я-]+\b", text or "", flags=re.U))
 
 
 def _fit_article_to_limits(data: dict) -> dict:
