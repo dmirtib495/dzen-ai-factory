@@ -125,7 +125,7 @@ def check_article(data, require_ai_audit=True):
     if any(re.search(pattern, text, re.I) for pattern in suspicious):
         critical("Есть обобщённая ссылка на экспертов/исследования без конкретной доказательной опоры", 18)
 
-    if re.search(r"\bнужно проверить\b|\bтребует проверки\b|\bуточнить источник\b", text, re.I):
+    if re.search(r"\bтребует проверки\b|\bуточнить источник\b|\bнужен источник\b|\bфакт не проверен\b", text, re.I):
         critical("В опубликованном тексте остались редакционные пометки о непроверенных фактах", 18)
 
     normalized_paragraphs = [re.sub(r"\W+", " ", p.lower()).strip() for p in paragraphs]
