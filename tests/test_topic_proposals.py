@@ -15,22 +15,18 @@ def _item(title, score=50, idx=0):
     }
 
 
-def test_choice_set_has_mandatory_editorial_diversity():
-    candidates = [
-        _item('Toyota RAV4, 2019 г.', idx=1),
-        _item('Hyundai Palisade, 2022 г.', idx=2),
-        _item('Mazda CX-30, 2021 г.', idx=3),
-        _item('Nissan X-Trail, 2018 г.', idx=4),
-        _item('Skoda Kodiaq, 2020 г.', idx=5),
-        _item('Honda CR-V, 2019 г.', idx=6),
-        _item('Kia Sportage, 2021 г.', idx=7),
-        _item('Volkswagen Tiguan, 2020 г.', idx=8),
-        _item('Subaru Forester, 2019 г.', idx=9),
-        _item('Mitsubishi Outlander, 2020 г.', idx=10),
-        _item('Geely Monjaro, 2023 г.', idx=11),
-        _item('Haval Dargo, 2023 г.', idx=12),
+def _candidates():
+    names = [
+        'Toyota RAV4, 2019 г.', 'Hyundai Palisade, 2022 г.', 'Mazda CX-30, 2021 г.',
+        'Nissan X-Trail, 2018 г.', 'Skoda Kodiaq, 2020 г.', 'Honda CR-V, 2019 г.',
+        'Kia Sportage, 2021 г.', 'Volkswagen Tiguan, 2020 г.', 'Subaru Forester, 2019 г.',
+        'Mitsubishi Outlander, 2020 г.', 'Geely Monjaro, 2023 г.', 'Haval Dargo, 2023 г.',
     ]
-    choices = build_diverse_choices(candidates, history=[])
+    return [_item(title, idx=i) for i, title in enumerate(names, 1)]
+
+
+def test_choice_set_has_mandatory_editorial_diversity():
+    choices = build_diverse_choices(_candidates(), history=[])
     assert len(choices) == 5
     assert [x['format'] for x in choices] == ['single', 'single', 'comparison', 'practical', 'market']
     assert 'Что выбрать:' in choices[2]['title']
@@ -39,8 +35,7 @@ def test_choice_set_has_mandatory_editorial_diversity():
 
 
 def test_derived_topics_preserve_multiple_source_evidence():
-    candidates = [_item(f'Model {i}, 2020 г.', idx=i) for i in range(1, 13)]
-    comparison = build_diverse_choices(candidates, history=[])[2]
+    comparison = build_diverse_choices(_candidates(), history=[])[2]
     brief, sources = _decode_summary(comparison['summary'])
     assert 'сравнение' in brief.lower()
     assert len(sources) == 3
