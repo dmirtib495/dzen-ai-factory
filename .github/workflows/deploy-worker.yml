@@ -41,7 +41,12 @@ jobs:
                   with urllib.request.urlopen(req, timeout=15) as r:
                       data=json.load(r)
                   print('health=', json.dumps(data, ensure_ascii=False, sort_keys=True))
-                  if data.get('ok') and data.get('d1_configured') is True and data.get('image_set_approval') is True:
+                  if (
+                      data.get('ok') and
+                      data.get('d1_configured') is True and
+                      data.get('image_set_approval') is True and
+                      data.get('topic_approval') is True
+                  ):
                       raise SystemExit(0)
                   last=data
               except Exception as exc:
