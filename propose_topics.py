@@ -12,7 +12,7 @@ load_dotenv()
 
 from analytics import recommended_categories
 from cloud_sync import query
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, YANDEX_API_KEY, YANDEX_FOLDER_ID, YANDEX_MODEL
 from topic_hunter import collect_topics
 from topic_scorer import rank
 
@@ -187,14 +187,210 @@ def build_diverse_choices(candidates: list[dict], history: list[str] | None = No
     return final[:CHOICE_COUNT]
 
 
-def _send_choices(group_id: str, choices: list[dict]) -> int:
+
+def _extract_json(text: str) -> dict:
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I | re.S)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, re.S)
+        if not match:
+            raise ValueError("YandexGPT did not return JSON")
+        data = json.loads(match.group(0))
+    if not isinstance(data, dict):
+        raise ValueError("YandexGPT response is not an object")
+    return data
+
+
+def _yandex_json(prompt: str, max_tokens: int = 7000) -> dict:
+    if not (YANDEX_API_KEY and YANDEX_FOLDER_ID):
+        raise RuntimeError("YandexGPT is not configured for editorial topic analysis")
+    response = requests.post(
+        "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+        headers={"Authorization": f"Api-Key {YANDEX_API_KEY}", "Content-Type": "application/json"},
+        json={
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/{YANDEX_MODEL}",
+            "completionOptions": {"stream": False, "temperature": 0.15, "maxTokens": max_tokens},
+            "messages": [
+                {
+                    "role": "system",
+                    "text": (
+                        "Ты главный редактор автомобильного медиа. Принимай решения по читательской "
+                        "пользе, намерению аудитории, актуальности, доказательной базе и разнообразию "
+                        "форматов. Не используй простое совпадение слов или названий моделей как главный критерий. "
+                        "Верни только валидный JSON."
+                    ),
+                },
+                {"role": "user", "text": prompt},
+            ],
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    return _extract_json(response.json()["result"]["alternatives"][0]["message"]["text"])
+
+
+def _custom_topics() -> list[dict]:
+    result = query(
+        """
+        SELECT id,title,summary,created_at
+        FROM topic_proposals
+        WHERE source IN ('Тема, предложенная пользователем','Источник, указанный пользователем')
+        ORDER BY id
+        """
+    ) or {}
+    return [dict(row) for row in result.get("results", [])]
+
+
+def _editorial_profile(custom: list[dict]) -> dict | None:
+    if len(custom) < 10:
+        return None
+    max_id = max(int(x.get("id") or 0) for x in custom)
+    cached = query("SELECT value FROM settings WHERE key='custom_topic_editorial_profile'") or {}
+    rows = cached.get("results", [])
+    if rows:
+        try:
+            value = json.loads(str(rows[0].get("value") or "{}"))
+            if int(value.get("source_count") or 0) == len(custom) and int(value.get("source_max_id") or 0) == max_id:
+                return value
+        except Exception:
+            pass
+
+    material = [
+        {"id": int(x.get("id") or 0), "topic": str(x.get("title") or ""), "context": str(x.get("summary") or "")[:700]}
+        for x in custom[-50:]
+    ]
+    prompt = f"""Проанализируй историю тем, которые владелец канала предложил лично.
+Это не задача поиска похожих марок или слов. Выведи устойчивую редакционную стратегию:
+- какие решения и проблемы владельцев автомобилей интересуют аудиторию;
+- какие читательские сценарии, риски, конфликты и вопросы выбора повторяются;
+- какие форматы и углы подачи предпочтительны;
+- какие темы нельзя предлагать только из-за поверхностной схожести;
+- как соединять этот профиль со свежими сигналами Дзена и реальными источниками.
+
+ТЕМЫ ВЛАДЕЛЬЦА:
+{json.dumps(material, ensure_ascii=False)}
+
+Верни JSON:
+{{
+  "audience_needs": ["..."],
+  "editorial_pillars": ["..."],
+  "decision_situations": ["..."],
+  "preferred_formats": ["..."],
+  "commercial_signals": ["..."],
+  "avoid_patterns": ["..."],
+  "selection_rules": ["..."]
+}}"""
+    profile = _yandex_json(prompt, max_tokens=4500)
+    profile["source_count"] = len(custom)
+    profile["source_max_id"] = max_id
+    now = datetime.now(timezone.utc).isoformat()
+    query(
+        """
+        INSERT INTO settings(key,value,updated_at) VALUES('custom_topic_editorial_profile',?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+        """,
+        [json.dumps(profile, ensure_ascii=False), now],
+    )
+    return profile
+
+
+def _professional_choices(candidates: list[dict], history: list[str], profile: dict) -> list[dict]:
+    pool = []
+    for idx, item in enumerate(candidates[:30]):
+        pool.append({
+            "index": idx,
+            "title": str(item.get("title") or ""),
+            "source": str(item.get("source") or ""),
+            "summary": str(item.get("summary") or "")[:600],
+            "score": float(item.get("score") or 0),
+            "dzen_signal": {
+                "title": str(item.get("trend_title") or ""),
+                "views": int(item.get("trend_views") or 0),
+                "channel": str(item.get("trend_channel") or ""),
+            },
+        })
+    prompt = f"""Выбери пять новых тем для автомобильного канала как профессиональный главный редактор.
+
+РЕДАКЦИОННЫЙ ПРОФИЛЬ, построенный минимум по 10 личным темам владельца:
+{json.dumps(profile, ensure_ascii=False)}
+
+СВЕЖИЕ ПРОВЕРЯЕМЫЕ ИСТОЧНИКИ И СИГНАЛЫ ДЗЕНА:
+{json.dumps(pool, ensure_ascii=False)}
+
+НЕДАВНИЕ ТЕМЫ, которые нельзя повторять:
+{json.dumps(history[-80:], ensure_ascii=False)}
+
+Правила:
+1. Сначала оцени читательское намерение, практическую пользу, риск переплаты/ошибки, актуальность и силу источников.
+2. Совпадение марки, модели или отдельных слов с историей владельца само по себе ничего не доказывает.
+3. Не объединяй несопоставимые объекты: рыночную статистику нельзя ставить как автомобиль в сравнении моделей.
+4. Нужны разные форматы: конкретная модель, практический разбор, честное сравнение сопоставимых машин, рыночная/правовая тема и одна сильная тема по редакционному профилю.
+5. Каждый вариант обязан опираться только на указанные source_indices.
+6. Заголовки должны быть естественными, конкретными и без дешёвого кликбейта.
+7. Не копируй личные темы владельца; развивай их редакционную логику на свежем материале.
+
+Верни JSON:
+{{
+  "choices": [
+    {{
+      "title": "...",
+      "format": "single|practical|comparison|market|editorial",
+      "source_indices": [0],
+      "editorial_brief": "...",
+      "rationale": "почему тема соответствует профилю и свежему спросу"
+    }}
+  ]
+}}
+Ровно пять choices."""
+    result = _yandex_json(prompt)
+    raw_choices = result.get("choices")
+    if not isinstance(raw_choices, list) or len(raw_choices) != 5:
+        raise ValueError("Editorial selector did not return exactly five choices")
+    labels = {
+        "single": "🚗 Модель", "practical": "🔧 Практика", "comparison": "⚖️ Сравнение",
+        "market": "📊 Рынок", "editorial": "🎯 По твоим темам",
+    }
+    final = []
+    for position, choice in enumerate(raw_choices):
+        if not isinstance(choice, dict):
+            raise ValueError("Invalid editorial choice")
+        indices = []
+        for value in choice.get("source_indices") or []:
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < len(candidates) and idx not in indices:
+                indices.append(idx)
+        if not indices:
+            raise ValueError("Editorial choice has no valid source")
+        items = [candidates[idx] for idx in indices[:5]]
+        item = dict(items[0])
+        fmt = str(choice.get("format") or "editorial")
+        brief = str(choice.get("editorial_brief") or "").strip()
+        rationale = str(choice.get("rationale") or "").strip()
+        item.update({
+            "title": str(choice.get("title") or item.get("title") or "").strip(),
+            "format": fmt,
+            "format_label": labels.get(fmt, "🎯 По твоим темам"),
+            "summary": _bundle_summary(brief + ("\n\nРедакторская причина выбора: " + rationale if rationale else ""), items),
+            "score": sum(float(x.get("score") or 0) for x in items) / len(items) + (5 - position),
+            "preference_rationale": rationale,
+            "profile_source_count": int(profile.get("source_count") or 0),
+        })
+        final.append(item)
+    return final
+
+def _send_choices(group_id: str, choices: list[dict], profile_count: int = 0) -> int:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         raise RuntimeError("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID не настроены")
     lines = [
         "🧭 Выбери тему для следующей статьи",
         "",
         "Теперь варианты специально разных форматов. Фабрика НЕ начнёт писать статью, пока ты не выберешь один:",
-        "",
+        *( [f"🎯 Учтён редакционный профиль по {profile_count} твоим темам.", ""] if profile_count >= 10 else [""] ),
     ]
     keyboard = []
     for idx, item in enumerate(choices, 1):
@@ -234,7 +430,21 @@ def main() -> None:
             -float(t.get("score", 0)),
         ),
     )
-    choices = build_diverse_choices(candidates, history)
+    custom = _custom_topics()
+    profile = None
+    if len(custom) >= 10:
+        try:
+            profile = _editorial_profile(custom)
+            choices = _professional_choices(candidates, history, profile)
+            print("CUSTOM_EDITORIAL_PROFILE_APPLIED", json.dumps({
+                "source_count": len(custom),
+                "pillars": (profile or {}).get("editorial_pillars", []),
+            }, ensure_ascii=False))
+        except Exception as exc:
+            print(f"CUSTOM_EDITORIAL_PROFILE_FALLBACK reason={exc}")
+            choices = build_diverse_choices(candidates, history)
+    else:
+        choices = build_diverse_choices(candidates, history)
 
     now = datetime.now(timezone.utc).isoformat()
     group_id = uuid.uuid4().hex[:16]
@@ -265,7 +475,7 @@ def main() -> None:
         item["proposal_id"] = int(rows[0]["id"])
         stored.append(item)
 
-    message_id = _send_choices(group_id, stored)
+    message_id = _send_choices(group_id, stored, len(custom) if profile else 0)
     query(
         "UPDATE topic_proposal_groups SET telegram_message_id=?,updated_at=? WHERE id=?",
         [message_id, datetime.now(timezone.utc).isoformat(), group_id],
