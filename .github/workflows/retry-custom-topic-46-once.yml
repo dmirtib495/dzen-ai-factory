@@ -1,5 +1,7 @@
 name: Retry Custom Topic 46 Once
 
+# Retry after editorial evidence safeguards
+
 on:
   push:
     branches: [main]
