@@ -71,7 +71,14 @@ def _reserve_exact_set() -> int:
     return TARGET_IMAGES_PER_SET
 
 
-def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str = 'dzen-factory') -> dict:
+def generate_image_set(
+    article_id: int,
+    headline: str,
+    *,
+    article_markdown: str = '',
+    category: str = '',
+    artifact_prefix: str = 'dzen-factory',
+) -> dict:
     """Generate exactly five images, persist them, and send one preview."""
     run_id = os.getenv('GITHUB_RUN_ID', '').strip() or 'local'
     run_number = os.getenv('GITHUB_RUN_NUMBER', '').strip() or run_id
@@ -87,7 +94,12 @@ def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str =
 
     folder = BATCH_ROOT / f'batch_{batch_id}'
     folder.mkdir(parents=True, exist_ok=True)
-    prompts = editorial_prompts(headline, image_count)
+    prompts = editorial_prompts(
+        headline,
+        image_count,
+        article_markdown=article_markdown,
+        category=category,
+    )
     candidates = []
 
     try:
@@ -143,8 +155,15 @@ def generate_image_set(article_id: int, headline: str, *, artifact_prefix: str =
 
 
 def generate_existing_article_set(article_id: int, *, artifact_prefix: str = 'image-batch') -> dict:
-    result = query('SELECT headline FROM articles WHERE id=?', [article_id]) or {}
+    result = query('SELECT headline,article_markdown,category FROM articles WHERE id=?', [article_id]) or {}
     rows = result.get('results', [])
     if not rows:
         raise RuntimeError(f'Article #{article_id} not found in D1')
-    return generate_image_set(article_id, str(rows[0].get('headline') or ''), artifact_prefix=artifact_prefix)
+    article = rows[0]
+    return generate_image_set(
+        article_id,
+        str(article.get('headline') or ''),
+        article_markdown=str(article.get('article_markdown') or ''),
+        category=str(article.get('category') or ''),
+        artifact_prefix=artifact_prefix,
+    )
