@@ -1,0 +1,36 @@
+name: One-shot Dzen Cloud Dispatch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-dzen-dispatch.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch current dzen-cloud workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import os, requests
+          repo=os.environ['REPO']
+          token=os.environ['GH_TOKEN']
+          url=f'https://api.github.com/repos/{repo}/actions/workflows/dzen-cloud.yml/dispatches'
+          r=requests.post(url,headers={
+              'Authorization':f'Bearer {token}',
+              'Accept':'application/vnd.github+json',
+              'X-GitHub-Api-Version':'2022-11-28',
+          },json={'ref':'main','inputs':{'trigger_source':'one-shot-e2e'}},timeout=30)
+          print('dispatch_status=',r.status_code)
+          if r.status_code != 204:
+              print(r.text)
+              raise SystemExit(1)
+          PY
