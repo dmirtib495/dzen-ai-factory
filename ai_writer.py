@@ -430,20 +430,57 @@ def _mechanical_quality_cleanup(data: dict) -> dict:
 
     heading_seen = 0
     lines = []
+    normalized_headline = re.sub(r"\W+", " ", headline.lower()).strip()
     for line in text.splitlines():
-        if re.match(r"^##\s+", line):
+        heading_match = re.match(r"^\s*#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if heading_match:
+            heading_text = heading_match.group(1).strip()
+            if re.sub(r"\W+", " ", heading_text.lower()).strip() == normalized_headline:
+                continue
             heading_seen += 1
-            if heading_seen > 8:
-                line = "**" + re.sub(r"^##\s+", "", line).strip() + "**"
+            line = f"## {heading_text}" if heading_seen <= 8 else f"**{heading_text}**"
         lines.append(line)
     data["article_markdown"] = "\n".join(lines).strip()
     data["headline"] = headline.strip()
     return data
 
 
+def _remove_unsupported_custom_topic_numbers(data: dict) -> dict:
+    """Delete complete sentences with figures invented for a source-free user brief."""
+    evidence = data.get("source_evidence") if isinstance(data.get("source_evidence"), dict) else {}
+    if _as_text(evidence.get("source")) != "Тема, предложенная пользователем":
+        return data
+
+    allowed_text = f"{_as_text(evidence.get('title'))} {_as_text(evidence.get('summary'))}"
+    allowed_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", allowed_text))
+    text = _as_text(data.get("article_markdown"))
+    changed = False
+    cleaned_blocks = []
+    for block in text.split("\n\n"):
+        if block.lstrip().startswith("#"):
+            cleaned_blocks.append(block)
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+", block.strip())
+        kept = []
+        for sentence in sentences:
+            claim_text = re.sub(r"(?m)^\s*\d+[.)]\s*", "", sentence)
+            numbers = set(re.findall(r"\d+(?:[.,]\d+)?", claim_text))
+            if numbers and not numbers.issubset(allowed_numbers):
+                changed = True
+                continue
+            kept.append(sentence)
+        if kept:
+            cleaned_blocks.append(" ".join(kept).strip())
+    if changed:
+        data["article_markdown"] = "\n\n".join(cleaned_blocks).strip()
+        data["ai_stages"] = data.get("ai_stages", []) + ["Deterministic:unsupported-number-cleanup"]
+    return data
+
+
 def _repair(data: dict, topic: dict) -> dict:
     for attempt in range(1, 4):
         data = _mechanical_quality_cleanup(data)
+        data = _remove_unsupported_custom_topic_numbers(data)
         deterministic = check_article(data, require_ai_audit=False)
         audit = _quality_audit(data)
         log.info(
@@ -486,6 +523,7 @@ def _repair(data: dict, topic: dict) -> dict:
         data.pop("ai_quality_audit", None)
 
     data = _mechanical_quality_cleanup(data)
+    data = _remove_unsupported_custom_topic_numbers(data)
     _quality_audit(data)
     return data
 
