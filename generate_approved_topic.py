@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -10,6 +11,31 @@ load_dotenv()
 from cloud_sync import query
 from db import add_topic
 import pipeline
+
+
+def _decode_summary(raw: str) -> tuple[str, list[dict]]:
+    text = str(raw or '').strip()
+    if not text.startswith('{'):
+        return text, []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return text, []
+    if not isinstance(payload, dict):
+        return text, []
+    brief = str(payload.get('editorial_brief') or '').strip()
+    sources = payload.get('sources') if isinstance(payload.get('sources'), list) else []
+    clean_sources = []
+    for item in sources:
+        if not isinstance(item, dict):
+            continue
+        clean_sources.append({
+            'title': str(item.get('title') or ''),
+            'url': str(item.get('url') or ''),
+            'source': str(item.get('source') or ''),
+            'summary': str(item.get('summary') or ''),
+        })
+    return brief or text, clean_sources
 
 
 def main() -> None:
@@ -43,23 +69,23 @@ def main() -> None:
     if not claimed.get('results') and row.get('status') != 'generating':
         raise SystemExit('Topic proposal could not be claimed')
 
+    editorial_summary, source_bundle = _decode_summary(str(row.get('summary') or ''))
     topic = {
         'id': add_topic(
             str(row.get('title') or ''),
             str(row.get('link') or ''),
             str(row.get('source') or ''),
-            str(row.get('summary') or ''),
+            editorial_summary,
             float(row.get('score') or 0),
         ),
         'title': str(row.get('title') or ''),
         'link': str(row.get('link') or ''),
         'source': str(row.get('source') or ''),
-        'summary': str(row.get('summary') or ''),
+        'summary': editorial_summary,
         'score': float(row.get('score') or 0),
+        'source_bundle': source_bundle,
     }
 
-    # Use the proven production pipeline, but force it to see only the option
-    # explicitly selected by the user in Telegram.
     pipeline.collect_topics = lambda limit=40: [topic]
     pipeline.rank = lambda items: list(items)
     pipeline.recommended_categories = lambda: []
