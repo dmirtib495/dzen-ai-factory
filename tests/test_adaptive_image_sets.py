@@ -120,3 +120,41 @@ def test_generic_ev_topic_uses_one_tesla_in_different_situations():
     assert any('motorway charging stop' in prompt for prompt in prompts)
     assert any('Black Sea' in prompt for prompt in prompts)
     assert any('service bay' in prompt for prompt in prompts)
+
+
+def test_semantic_visual_plan_binds_each_prompt_to_article_section(monkeypatch):
+    import image_generator
+
+    plan = [
+        {'section_index': 1, 'section_heading': 'Зарядка во дворе', 'prompt': 'A documentary ownership scene beside a residential charging point in Moscow, with the driver connecting the cable carefully.'},
+        {'section_index': 2, 'section_heading': 'Зимняя эксплуатация', 'prompt': 'A realistic cold-weather ownership scene in a snowy Moscow parking area, showing careful preparation before departure.'},
+        {'section_index': 3, 'section_heading': 'Поездка по трассе', 'prompt': 'A practical motorway rest-stop scene during an intercity journey, with the car safely parked near a charging bay.'},
+    ]
+    captured = {}
+
+    def fake_plan(headline, article_markdown, **kwargs):
+        captured['headline'] = headline
+        captured['article'] = article_markdown
+        captured.update(kwargs)
+        return plan
+
+    monkeypatch.setattr(image_generator, '_yandex_visual_plan', fake_plan)
+    article = (
+        '## Зарядка во дворе\nПодготовка городской зарядки.\n\n'
+        '## Зимняя эксплуатация\nПоездки в мороз.\n\n'
+        '## Поездка по трассе\nМаршрут между городами.'
+    )
+    prompts = image_generator.editorial_prompts(
+        'Электромобиль в Москве: город, зима и трасса',
+        3,
+        article_markdown=article,
+        category='Авто-технологии',
+    )
+
+    assert captured['article'] == article
+    assert captured['count'] == 3
+    assert all('Tesla Model 3' in prompt for prompt in prompts)
+    assert 'Зарядка во дворе' in prompts[0]
+    assert 'Зимняя эксплуатация' in prompts[1]
+    assert 'Поездка по трассе' in prompts[2]
+    assert len(set(prompts)) == 3
