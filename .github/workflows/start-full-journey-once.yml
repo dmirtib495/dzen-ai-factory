@@ -47,3 +47,5 @@ jobs:
         run: python propose_topics.py
 
 # Manual full-cycle trigger: 2026-09-06T11:05:00Z
+
+# Retry topic button after adaptive choices fix: 2026-09-06T11:35:00Z
