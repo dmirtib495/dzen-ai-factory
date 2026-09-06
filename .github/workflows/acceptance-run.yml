@@ -1,4 +1,4 @@
-# acceptance v7: one-article end-to-end with preserved source evidence
+# acceptance v8: one-article end-to-end after OpenRouter UTC daily reset
 name: Production Acceptance Run
 
 on:
