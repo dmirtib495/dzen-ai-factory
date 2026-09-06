@@ -317,3 +317,48 @@ def test_final_length_fit_removes_complete_sentences_without_truncation(monkeypa
     assert ai_writer._russian_word_count(result['article_markdown']) <= 27
     assert result['article_markdown'].rstrip().endswith(('.', '!', '?'))
     assert 'Deterministic:final-length-fit' in result['ai_stages']
+
+
+def test_mechanical_cleanup_normalizes_markdown_heading_levels():
+    import ai_writer
+
+    data = {
+        'headline': 'Отдельный заголовок публикации достаточной длины для проверки',
+        'article_markdown': (
+            '# Отдельный заголовок публикации достаточной длины для проверки\n\n'
+            '### Зарядка в городе\n\nТекст раздела.\n\n'
+            '#### Поездка по трассе\n\nТекст раздела.'
+        ),
+    }
+
+    result = ai_writer._mechanical_quality_cleanup(data)
+
+    assert result['article_markdown'].count('## ') == 2
+    assert result['article_markdown'].startswith('## Зарядка в городе')
+    assert '# Отдельный заголовок публикации' not in result['article_markdown']
+
+
+def test_source_free_custom_topic_drops_only_unsupported_numeric_sentences():
+    import ai_writer
+
+    data = {
+        'article_markdown': (
+            '## Зарядка\n\n'
+            'Перед поездкой проверьте доступность станций в приложении. '
+            'Быстрая зарядка обычно выдаёт 150 кВт. '
+            'Оставляйте запас хода и заранее выбирайте резервную точку.'
+        ),
+        'source_evidence': {
+            'source': 'Тема, предложенная пользователем',
+            'title': 'Эксплуатация электромобиля',
+            'summary': 'Городские зарядки и поездки по трассе',
+        },
+        'ai_stages': [],
+    }
+
+    result = ai_writer._remove_unsupported_custom_topic_numbers(data)
+
+    assert '150' not in result['article_markdown']
+    assert 'Перед поездкой' in result['article_markdown']
+    assert 'Оставляйте запас' in result['article_markdown']
+    assert 'Deterministic:unsupported-number-cleanup' in result['ai_stages']
