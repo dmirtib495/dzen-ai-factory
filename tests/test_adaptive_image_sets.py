@@ -96,3 +96,27 @@ def test_single_vehicle_prompts_do_not_invent_comparison():
     assert len(prompts) == 5
     assert all('Mitsubishi Pajero' in prompt for prompt in prompts)
     assert not any('two clearly separate real vehicles' in prompt for prompt in prompts)
+
+
+def test_generic_ev_topic_uses_one_tesla_in_different_situations():
+    from image_generator import editorial_prompts
+
+    prompts = editorial_prompts(
+        'Владение электромобилем в Москве и поездки на море',
+        5,
+        article_markdown=(
+            '## Городская зарядка\nПрактика зарядки электромобиля.\n\n'
+            '## Зима\nЭксплуатация зимой.\n\n'
+            '## Трасса\nПодготовка дальней поездки.'
+        ),
+        category='Авто-технологии',
+    )
+
+    assert len(prompts) == 5
+    assert all('Tesla Model 3' in prompt for prompt in prompts)
+    assert all('pearl white' in prompt for prompt in prompts)
+    assert any('Moscow' in prompt and 'charging station' in prompt for prompt in prompts)
+    assert any('snowy Moscow' in prompt for prompt in prompts)
+    assert any('motorway charging stop' in prompt for prompt in prompts)
+    assert any('Black Sea' in prompt for prompt in prompts)
+    assert any('service bay' in prompt for prompt in prompts)
