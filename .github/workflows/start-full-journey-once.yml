@@ -45,3 +45,5 @@ jobs:
         run: python cloud_sync.py
       - name: Send diversified topic choices to Telegram
         run: python propose_topics.py
+
+# Manual full-cycle trigger: 2026-09-06T11:05:00Z
