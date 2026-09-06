@@ -110,6 +110,23 @@ def generate_image_set(
         article_markdown=article_markdown,
         category=category,
     )
+    prompt_plan = {
+        'article_id': article_id,
+        'headline': headline,
+        'category': category,
+        'image_count': image_count,
+        'prompts': [
+            {'index': idx, 'prompt': prompt}
+            for idx, prompt in enumerate(prompts, 1)
+        ],
+    }
+    (folder / 'visual_prompt_plan.json').write_text(
+        json.dumps(prompt_plan, ensure_ascii=False, indent=2), encoding='utf-8'
+    )
+    print(
+        f"IMAGE_PROMPT_PLAN_SAVED article_id={article_id} image_count={image_count} "
+        f"file={folder / 'visual_prompt_plan.json'}"
+    )
     candidates = []
 
     try:
