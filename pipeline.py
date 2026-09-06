@@ -68,6 +68,7 @@ def generate_batch():
         made = 0
         attempted = 0
         crashed = 0
+        quality_rejected = 0
         fatal_provider_error = ""
         max_attempts = min(len(topics), max(8, ARTICLES_PER_DAY * 10))
 
@@ -153,6 +154,11 @@ def generate_batch():
                 )
                 made += 1
             except Exception as exc:
+                if "professional quality gate" in str(exc).lower() or "превышает" in str(exc).lower():
+                    quality_rejected += 1
+                    update_topic_status(topic["id"], "rejected_quality")
+                    log.warning("Topic rejected by final quality gate: %s: %s", topic.get("title"), exc)
+                    continue
                 crashed += 1
                 update_topic_status(topic["id"], "error")
                 log.exception("Topic failed: %s", topic.get("title"))
@@ -168,6 +174,11 @@ def generate_batch():
                 notify(
                     "⚠️ Авто без переплаты: генерация остановлена на уровне AI-провайдера после "
                     f"{attempted} попытки. Причина: {fatal_provider_error[:900]}"
+                )
+            elif quality_rejected > 0 and quality_rejected + crashed >= attempted:
+                notify(
+                    "⚠️ Авто без переплаты: материал создан, но не прошёл финальный professional quality gate. "
+                    f"Отклонено по качеству: {quality_rejected}; технических сбоев: {crashed}."
                 )
             elif crashed >= attempted and attempted > 0:
                 notify(
