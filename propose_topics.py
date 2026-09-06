@@ -129,7 +129,7 @@ def build_diverse_choices(candidates: list[dict], history: list[str] | None = No
         seen.append(title)
         if len(fresh) >= 12:
             break
-    if len(fresh) < 5:
+    if len(fresh) < 3:
         raise RuntimeError(f"Not enough fresh source topics for diverse choice set: {len(fresh)}")
 
     choices: list[dict] = []
@@ -141,6 +141,8 @@ def build_diverse_choices(candidates: list[dict], history: list[str] | None = No
 
     # One comparison built from several independent source items.
     compare_items = fresh[2:5]
+    if len(compare_items) < 3:
+        compare_items += fresh[: 3 - len(compare_items)]
     compare_names = [_clean_vehicle_name(x.get("title", "")) for x in compare_items]
     choices.append(_derived(
         f"Что выбрать: {compare_names[0]}, {compare_names[1]} или {compare_names[2]} — сравниваем варианты для реальной покупки",
@@ -150,7 +152,7 @@ def build_diverse_choices(candidates: list[dict], history: list[str] | None = No
     ))
 
     # One practical ownership/buying angle.
-    practical = fresh[5]
+    practical = fresh[5] if len(fresh) > 5 else fresh[-1]
     practical_name = _clean_vehicle_name(practical.get("title", ""))
     choices.append(_derived(
         f"{practical_name} с пробегом: что проверить перед покупкой и кому такой автомобиль подойдёт",
@@ -160,7 +162,7 @@ def build_diverse_choices(candidates: list[dict], history: list[str] | None = No
     ))
 
     # One broad selection/market story using several sources, not one specific car.
-    market_items = fresh[6:11] if len(fresh) >= 11 else fresh[6:] + fresh[: max(0, 11-len(fresh))]
+    market_items = fresh[6:11] if len(fresh) >= 11 else fresh[:5]
     market_names = [_clean_vehicle_name(x.get("title", "")) for x in market_items[:5]]
     choices.append(_derived(
         "Пять интересных автомобилей из свежей повестки: что выбрать под разные задачи и бюджет",
