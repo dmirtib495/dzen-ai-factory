@@ -82,7 +82,9 @@ def check_article(data, require_ai_audit=True):
     if len(normalized_headings) != len(set(normalized_headings)):
         critical("Есть повторяющиеся подзаголовки", 10)
 
-    checklist_present = bool(re.search(r"чек[- ]?лист|что проверить|порядок проверки|проверьте по пунктам", text, re.I))
+    # Accept ASCII hyphen, spaces and typographic Unicode dashes/hyphens
+    # between "чек" and "лист". Generated Russian copy often uses U+2011/U+2013.
+    checklist_present = bool(re.search(r"чек(?:\s|[-‐‑‒–—―])*лист|что проверить|порядок проверки|проверьте по пунктам", text, re.I))
     if not checklist_present:
         critical("Нет отдельного практического чек-листа", 15)
 
