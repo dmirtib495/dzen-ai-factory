@@ -11,7 +11,7 @@ from image_quota import FLUX_SCHNELL_NEURONS_PER_IMAGE, reserve_neurons, status 
 from telegram_notify import notify_image_set
 
 TARGET_IMAGES_PER_SET = 5
-MIN_IMAGES_PER_SET = 5
+MIN_IMAGES_PER_SET = 3
 BATCH_ROOT = Path('data/image_batches')
 
 
@@ -53,22 +53,32 @@ def _update_batch(batch_id: int, *, status: str, candidate_json: str | None = No
         )
 
 
-def _reserve_exact_set() -> int:
-    """Reserve exactly five images or fail without downgrading the package."""
+def _reserve_adaptive_set() -> int:
+    """Atomically reserve the largest free set available, from three to five images."""
     quota = image_quota_status()
     remaining = float(quota.get('remaining', 0.0) or 0.0)
-    needed = FLUX_SCHNELL_NEURONS_PER_IMAGE * TARGET_IMAGES_PER_SET
-    if remaining + 1e-6 < needed:
+    affordable = int((remaining + 1e-6) // FLUX_SCHNELL_NEURONS_PER_IMAGE)
+    candidate = min(TARGET_IMAGES_PER_SET, affordable)
+    if candidate < MIN_IMAGES_PER_SET:
         raise RuntimeError(
-            f'Недостаточно общего дневного Workers AI бюджета для обязательного набора '
-            f'из {TARGET_IMAGES_PER_SET} изображений'
+            f'Недостаточно общего дневного Workers AI бюджета даже для минимального набора '
+            f'из {MIN_IMAGES_PER_SET} изображений'
         )
-    if not reserve_neurons(needed):
-        raise RuntimeError(
-            f'Не удалось атомарно зарезервировать бюджет на обязательные '
-            f'{TARGET_IMAGES_PER_SET} изображений'
-        )
-    return TARGET_IMAGES_PER_SET
+
+    # Another workflow may reserve between status() and our write. Retry with
+    # a smaller complete set; failed atomic reservations do not spend quota.
+    for image_count in range(candidate, MIN_IMAGES_PER_SET - 1, -1):
+        needed = FLUX_SCHNELL_NEURONS_PER_IMAGE * image_count
+        if reserve_neurons(needed):
+            return image_count
+    raise RuntimeError(
+        f'Не удалось атомарно зарезервировать бюджет на набор '
+        f'из {MIN_IMAGES_PER_SET}–{TARGET_IMAGES_PER_SET} изображений'
+    )
+
+
+# Compatibility alias for older callers and tests.
+_reserve_exact_set = _reserve_adaptive_set
 
 
 def generate_image_set(
@@ -79,7 +89,7 @@ def generate_image_set(
     category: str = '',
     artifact_prefix: str = 'dzen-factory',
 ) -> dict:
-    """Generate exactly five images, persist them, and send one preview."""
+    """Generate the largest affordable set of three to five images and send one preview."""
     run_id = os.getenv('GITHUB_RUN_ID', '').strip() or 'local'
     run_number = os.getenv('GITHUB_RUN_NUMBER', '').strip() or run_id
     artifact_name = f'{artifact_prefix}-{run_number}'
@@ -87,7 +97,7 @@ def generate_image_set(
     batch_id = _insert_batch(article_id, attempt, run_id, artifact_name)
 
     try:
-        image_count = _reserve_exact_set()
+        image_count = _reserve_adaptive_set()
     except Exception:
         _update_batch(batch_id, status='quota_blocked')
         raise
