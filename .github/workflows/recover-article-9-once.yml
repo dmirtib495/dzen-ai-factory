@@ -1,0 +1,56 @@
+name: Recover Approved Article 9 Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/recover-article-9-once.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: recover-approved-article-9-once
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Initialize D1 schema
+        run: python cloud/init_d1.py
+      - name: Download original approved source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: source-artifact
+          run-id: 34025650807
+          github-token: ${{ github.token }}
+      - name: Build approved article 9 DOCX and ZIP
+        run: python finalize_article_package.py --article-id 9 --batch-id 2 --source-root source-artifact
+      - name: Upload recovered package
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-article-package-9-2
+          path: data/packages/*.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Deliver recovered ZIP to Telegram
+        run: python deliver_article_package.py
+      - name: Aggregate daily package if ready
+        run: python aggregate_daily_package.py
