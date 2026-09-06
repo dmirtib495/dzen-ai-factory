@@ -8,7 +8,7 @@ on:
         description: 'Approved topic proposal ID'
         required: true
       force_run:
-        description: 'Explicitly bypass the 6-request preflight reserve (hard shared quota still applies)'
+        description: 'Explicitly bypass the internal shared text-quota guard for this run'
         required: false
         default: 'false'
 
@@ -104,6 +104,8 @@ jobs:
         run: python cloud_sync.py
       - name: Generate only the Telegram-approved topic
         if: steps.quota.outputs.can_run == 'true'
+        env:
+          FORCE_RUN: ${{ inputs.force_run }}
         run: python generate_approved_topic.py --proposal-id "${{ inputs.proposal_id }}"
       - name: Sync results to Cloudflare D1
         if: always()
