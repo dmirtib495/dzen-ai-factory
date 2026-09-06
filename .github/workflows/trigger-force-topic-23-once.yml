@@ -18,3 +18,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run generate-approved-topic.yml -R dmirtib495/dzen-ai-factory -f proposal_id=29 -f force_run=true
+
+# Retry after full force fix: 2026-09-06T11:12:00Z
