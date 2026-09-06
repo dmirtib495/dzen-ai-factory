@@ -294,3 +294,26 @@ def test_quota_record_success_is_telemetry_only(monkeypatch):
     monkeypatch.setattr(quota, 'reserve_ai_request', lambda limit: calls.append(limit) or True)
     assert quota.record_success() is True
     assert calls == [1_000_000_000]
+
+
+def test_final_length_fit_removes_complete_sentences_without_truncation(monkeypatch):
+    import ai_writer
+
+    monkeypatch.setattr(ai_writer, 'MIN_ARTICLE_WORDS', 20)
+    monkeypatch.setattr(ai_writer, 'MAX_ARTICLE_WORDS', 35)
+    data = {
+        'article_markdown': (
+            '## Раздел\n\n'
+            'Первое предложение содержит полезную проверку автомобиля перед покупкой. '
+            'Второе предложение объясняет возможный риск дополнительных расходов после сделки. '
+            'Третье предложение предлагает провести независимую диагностику перед оплатой. '
+            'Четвертое предложение повторяет второстепенную рекомендацию для осторожного покупателя.'
+        ),
+        'ai_stages': [],
+    }
+
+    result = ai_writer._fit_article_to_limits(data)
+
+    assert ai_writer._russian_word_count(result['article_markdown']) <= 35
+    assert result['article_markdown'].rstrip().endswith(('.', '!', '?'))
+    assert 'Deterministic:final-length-fit' in result['ai_stages']
