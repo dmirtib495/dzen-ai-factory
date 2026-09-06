@@ -477,6 +477,43 @@ def _remove_unsupported_custom_topic_numbers(data: dict) -> dict:
     return data
 
 
+def _source_free_final_rewrite(data: dict, topic: dict) -> dict:
+    """Rebuild a source-free custom brief coherently after factual sanitizing."""
+    if _as_text(topic.get("source")) != "Тема, предложенная пользователем":
+        return data
+    payload = json.dumps(_editor_input(data), ensure_ascii=False)
+    prompt = f"""РОЛЬ: независимый выпускающий редактор. Перепиши материал ЦЕЛИКОМ с чистого листа,
+потому что точечное удаление неподтверждённых фактов нарушило связность.
+
+Редакционное задание пользователя: {_as_text(topic.get("title"))}
+Контекст задания: {_as_text(topic.get("summary"))}
+
+ЖЁСТКИЕ УСЛОВИЯ:
+- article_markdown содержит от 1050 до 1200 русских слов;
+- ровно семь самостоятельных подзаголовков, каждый строго начинается с ##;
+- география Москвы явно задана во вступлении и учитывается по всему тексту;
+- отдельные разделы про городской сценарий, подготовку дальней поездки, зимнюю эксплуатацию,
+  проверку подержанной машины, ошибки/переплату, практический чек-лист и вывод;
+- каждый раздел добавляет новую практическую задачу, без повторения одного совета;
+- чек-лист кратко задаёт порядок решения и не пересказывает абзацы дословно;
+- никаких цифр, диапазонов, процентов, мощностей, цен, сроков, названий стандартов разъёмов,
+  операторов, приложений, льгот или правовых норм;
+- никаких фраз «требует проверки», «уточнить источник», «факт не проверен»;
+- можно использовать только общие качественные принципы и действия читателя;
+- source_urls сохранить без изменений;
+- верни только валидный JSON с полями headline, headlines, category, article_markdown,
+  fact_check, image_prompt, source_urls, commercial_intent.
+
+Предыдущая версия дана только для понимания темы; не копируй её структуру и повторы:
+{payload}"""
+    parsed = _yandex_json(prompt, "Независимый редактор связности", temperature=0.08)
+    rewritten = _merge_editor(data, parsed, "YandexGPT/IndependentCoherenceEditor", YANDEX_MODEL)
+    rewritten["source_urls"] = _source_urls(topic)
+    rewritten["source_evidence"] = _source_evidence(topic)
+    rewritten.pop("ai_quality_audit", None)
+    return rewritten
+
+
 def _repair(data: dict, topic: dict) -> dict:
     for attempt in range(1, 4):
         data = _mechanical_quality_cleanup(data)
@@ -522,6 +559,7 @@ def _repair(data: dict, topic: dict) -> dict:
         data["source_evidence"] = _source_evidence(topic)
         data.pop("ai_quality_audit", None)
 
+    data = _source_free_final_rewrite(data, topic)
     data = _mechanical_quality_cleanup(data)
     data = _remove_unsupported_custom_topic_numbers(data)
     _quality_audit(data)
