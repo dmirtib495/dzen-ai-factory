@@ -44,25 +44,108 @@ def make_cover(title, category='Авто'):
     return path
 
 
-def editorial_prompts(headline: str, count: int = 5) -> list[str]:
-    """Build up to five distinct editorial scenes without another AI call."""
+def _vehicle_mentions(text: str) -> list[str]:
+    """Extract repeatedly named make/model subjects without semantic guesswork."""
+    brands = (
+        "Toyota|Honda|Nissan|Mazda|Mitsubishi|Subaru|Suzuki|Lexus|Infiniti|Acura|"
+        "Hyundai|Kia|Genesis|Ford|Chevrolet|Cadillac|Jeep|Tesla|Volkswagen|Audi|"
+        "BMW|Mercedes(?:-Benz)?|Porsche|Volvo|Skoda|Renault|Peugeot|Citroen|Fiat|"
+        "Land Rover|Range Rover|Geely|Chery|Haval|Exeed|Changan|Li Auto|Zeekr|BYD|"
+        "Lada|УАЗ|ГАЗ"
+    )
+    pattern = re.compile(
+        rf"\b({brands})\s+([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9-]*"
+        rf"(?:\s+[A-Za-z0-9][A-Za-z0-9-]*){{0,2}})",
+        re.I,
+    )
+    stop = {
+        "с", "и", "или", "против", "для", "при", "на", "в", "от", "до",
+        "уже", "может", "был", "будет", "после", "перед",
+    }
+    counts: dict[str, int] = {}
+    canonical: dict[str, str] = {}
+    for match in pattern.finditer(text or ""):
+        make = match.group(1).strip()
+        model_parts = match.group(2).strip().split()
+        while model_parts and model_parts[-1].lower() in stop:
+            model_parts.pop()
+        if not model_parts:
+            continue
+        subject = f"{make} {' '.join(model_parts)}".strip(" ,.-")
+        key = subject.lower()
+        counts[key] = counts.get(key, 0) + 1
+        canonical.setdefault(key, subject)
+    return [
+        canonical[key] for key in sorted(
+            counts, key=lambda value: (-counts[value], (text or "").lower().find(value))
+        )
+    ]
+
+
+def editorial_prompts(
+    headline: str,
+    count: int = 5,
+    *,
+    article_markdown: str = "",
+    category: str = "",
+) -> list[str]:
+    """Build five subject-aware editorial scenes without another AI call."""
     count = max(1, min(5, int(count)))
-    subject = (headline or 'the exact car model discussed in the article').strip()[:220]
-    base = (
-        f'Photorealistic editorial automotive photography about: {subject}. '
-        'The vehicle model and generation must match the named subject accurately, '
-        'factory body proportions, realistic wheels, headlights and grille, '
-        'natural materials, no invented badges, no readable text, no watermark. '
+    context = f"{headline}\n{article_markdown}"
+    subjects = _vehicle_mentions(context)
+    comparison_words = re.search(
+        r"\b(сравнен|сравнива|против|versus|\bvs\b|что выбрать|или)\b",
+        context,
+        re.I,
+    )
+    is_comparison = len(subjects) >= 2 and (
+        bool(comparison_words) or str(category or "").strip().lower() == "сравнения"
+    )
+
+    rules = (
+        "Photorealistic editorial automotive photography, accurate factory body proportions, "
+        "realistic wheels, headlights and grille, natural materials and daylight, 16:9 composition. "
+        "No readable text, signs, maps, logos, watermark, invented badges, distorted parts or fantasy elements. "
+    )
+    if is_comparison:
+        first, second = subjects[:2]
+        prompts = [
+            rules + (
+                f"Honest comparison cover: two clearly separate real vehicles, {first} on the left and "
+                f"{second} on the right, both fully visible at equal visual importance, parked side by side "
+                "on neutral pavement. Do not merge their designs and do not duplicate either model."
+            ),
+            rules + (
+                f"Vehicle one of the comparison only: {first}, front three-quarter exterior view, full car visible. "
+                f"No {second} in this frame; preserve the authentic design of {first}."
+            ),
+            rules + (
+                f"Vehicle two of the comparison only: {second}, front three-quarter exterior view, full car visible. "
+                f"No {first} in this frame; preserve the authentic design of {second}."
+            ),
+            rules + (
+                f"Direct side-profile comparison: {first} and {second} as two distinct vehicles parked parallel, "
+                "both complete and unobstructed, consistent camera distance and scale. No hybridized vehicle."
+            ),
+            rules + (
+                f"Practical buyer inspection scene with both distinct cars, {first} and {second}, in a clean service "
+                "or parking area, one mechanic comparing them, both vehicles clearly identifiable and fully separate."
+            ),
+        ]
+        return prompts[:count]
+
+    subject = subjects[0] if subjects else (headline or "the exact car model discussed in the article").strip()[:220]
+    base = rules + (
+        f"Main subject: {subject}. The vehicle model and generation must match the named subject accurately. "
     )
     scenes = [
-        'Hero image, front three-quarter exterior view on a clean urban road, soft natural daylight, 16:9 editorial composition.',
-        'Rear three-quarter exterior view on a real road, natural daylight, realistic reflections, documentary automotive magazine style.',
-        'Side profile parked near modern architecture, neutral daylight, full vehicle visible, realistic perspective.',
-        'Interior cockpit view from the rear seats looking forward, realistic dashboard and steering wheel appropriate to the named vehicle, natural light.',
-        'Practical ownership scene at a parking or service area, the named vehicle clearly visible, realistic everyday environment, editorial photojournalism.',
+        "Hero image, front three-quarter exterior view on a clean urban road, soft natural daylight.",
+        "Rear three-quarter exterior view on a real road, natural daylight, realistic reflections.",
+        "Side profile parked near modern architecture, neutral daylight, full vehicle visible.",
+        "Interior cockpit view from the rear seats looking forward, realistic dashboard and steering wheel.",
+        "Practical ownership scene at a parking or service area, vehicle clearly visible, editorial photojournalism.",
     ]
     return [base + scene for scene in scenes[:count]]
-
 
 def generate_cloudflare_image(prompt: str, output_path: str | Path, *, quota_reserved: bool = False) -> dict:
     """Generate one 1024x1024 FLUX Schnell JPEG and return measured usage."""
