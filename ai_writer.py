@@ -216,53 +216,82 @@ def _openrouter_json(models: list[str], prompt: str, role: str, temperature: flo
     raise RuntimeError(f"{role} недоступен: " + " | ".join(errors))
 
 
-def _draft(topic: dict) -> dict:
-    if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY не задан")
-    sources = _source_urls(topic)
-    parsed, requested_model, actual_model = _openrouter_json(
-        [DEEPSEEK_MODEL, OPENROUTER_MODEL, "openrouter/free"],
-        draft_prompt(topic, sources),
-        "Автор-аналитик",
-        0.32,
-        "DeepSeek/OpenRouter",
-    )
-    provider = "FixedFree/OpenRouter" if requested_model == DEEPSEEK_MODEL else "OpenRouter"
-    data = _normalize(parsed, provider, actual_model)
-    data["source_urls"] = sources
-    data["source_evidence"] = _source_evidence(topic)
-    log.info(
-        "DRAFT_OK headline=%r model=%s source_summary_chars=%s",
-        data.get("headline"), actual_model, len(data["source_evidence"].get("summary", "")),
-    )
-    return data
-
-
-def _yandex_edit(data: dict) -> dict:
+def _yandex_json(prompt: str, role: str, temperature: float = 0.12, max_tokens: int = 9000) -> dict:
     if not (YANDEX_API_KEY and YANDEX_FOLDER_ID):
         raise RuntimeError("Yandex AI не настроен: нужны YANDEX_API_KEY и YANDEX_FOLDER_ID")
-    url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-    body = {
-        "modelUri": f"gpt://{YANDEX_FOLDER_ID}/{YANDEX_MODEL}",
-        "completionOptions": {"stream": False, "temperature": 0.12, "maxTokens": 9000},
-        "messages": [
-            {"role": "system", "text": EDITORIAL_SYSTEM},
-            {"role": "user", "text": yandex_editor_prompt(data)},
-        ],
-    }
     response = requests.post(
-        url,
+        "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
         headers={"Authorization": f"Api-Key {YANDEX_API_KEY}", "Content-Type": "application/json"},
-        json=body,
+        json={
+            "modelUri": f"gpt://{YANDEX_FOLDER_ID}/{YANDEX_MODEL}",
+            "completionOptions": {
+                "stream": False,
+                "temperature": temperature,
+                "maxTokens": max_tokens,
+            },
+            "messages": [
+                {"role": "system", "text": EDITORIAL_SYSTEM},
+                {"role": "user", "text": prompt},
+            ],
+        },
         timeout=120,
     )
     response.raise_for_status()
     parsed = _extract(response.json()["result"]["alternatives"][0]["message"]["text"])
     if not isinstance(parsed, dict):
-        raise ValueError("YandexGPT вернул некорректный JSON")
-    log.info("YandexGPT edit OK model=%s", YANDEX_MODEL)
-    return _merge_editor(data, parsed, "YandexGPT", YANDEX_MODEL)
+        raise ValueError(f"YandexGPT вернул некорректный JSON для роли: {role}")
+    log.info("YandexGPT JSON OK role=%s model=%s", role, YANDEX_MODEL)
+    return parsed
 
+
+def _draft(topic: dict) -> dict:
+    sources = _source_urls(topic)
+    prompt = draft_prompt(topic, sources)
+    try:
+        if not OPENROUTER_API_KEY:
+            raise RuntimeError("OPENROUTER_API_KEY не задан")
+        parsed, requested_model, actual_model = _openrouter_json(
+            [DEEPSEEK_MODEL, OPENROUTER_MODEL, "openrouter/free"],
+            prompt,
+            "Автор-аналитик",
+            0.32,
+            "DeepSeek/OpenRouter",
+        )
+        provider = "FixedFree/OpenRouter" if requested_model == DEEPSEEK_MODEL else "OpenRouter"
+        data = _normalize(parsed, provider, actual_model)
+    except Exception as exc:
+        log.warning("DRAFT_FALLBACK provider=YandexGPT reason=%s", exc)
+        parsed = _yandex_json(prompt, "Автор-аналитик", temperature=0.32)
+        data = _normalize(parsed, "YandexGPT/WriterFallback", YANDEX_MODEL)
+    data["source_urls"] = sources
+    data["source_evidence"] = _source_evidence(topic)
+    log.info(
+        "DRAFT_OK headline=%r provider=%s model=%s source_summary_chars=%s",
+        data.get("headline"), data.get("ai_provider"), data.get("ai_model"),
+        len(data["source_evidence"].get("summary", "")),
+    )
+    return data
+
+
+def _editor_input(data: dict) -> dict:
+    """Hide all provider/model history from every independent editorial request."""
+    keys = (
+        "headline", "headlines", "category", "article_markdown", "fact_check",
+        "image_prompt", "source_urls", "commercial_intent", "source_evidence",
+        "ai_quality_audit",
+    )
+    return {key: data.get(key) for key in keys if key in data}
+
+
+def _yandex_edit(data: dict) -> dict:
+    prompt = (
+        "Ты получил материал из редакционной очереди. Автор и использованные до тебя "
+        "инструменты намеренно не раскрываются. Не пытайся определять авторство; "
+        "проведи независимую профессиональную редактуру только по содержанию.\n\n"
+        + yandex_editor_prompt(_editor_input(data))
+    )
+    parsed = _yandex_json(prompt, "Независимый выпускающий редактор", temperature=0.12)
+    return _merge_editor(data, parsed, "YandexGPT/IndependentEditor", YANDEX_MODEL)
 
 def _final_edit(data: dict, repair_notes: str = "") -> dict:
     prompt = final_editor_prompt(data, repair_notes)
@@ -278,14 +307,24 @@ def _final_edit(data: dict, repair_notes: str = "") -> dict:
             raise ValueError("OpenAI вернул некорректный JSON")
         return _merge_editor(data, parsed, "OpenAI", OPENAI_MODEL)
 
-    parsed, requested_model, actual_model = _openrouter_json(
-        [OPENROUTER_EDITOR_MODEL, "openrouter/free"],
-        prompt,
-        "Финальный редактор",
-        0.08,
-        "OpenAI/OpenRouter",
-    )
-    return _merge_editor(data, parsed, "OpenAI/OpenRouter", actual_model)
+    try:
+        parsed, requested_model, actual_model = _openrouter_json(
+            [OPENROUTER_EDITOR_MODEL, "openrouter/free"],
+            prompt,
+            "Финальный редактор",
+            0.08,
+            "OpenAI/OpenRouter",
+        )
+        return _merge_editor(data, parsed, "OpenAI/OpenRouter", actual_model)
+    except Exception as exc:
+        log.warning("FINAL_EDITOR_FALLBACK provider=YandexGPT reason=%s", exc)
+        independent_prompt = (
+            "Ты получил материал из редакционной очереди. Автор и предыдущие инструменты "
+            "намеренно не раскрываются. Работай как независимый главный редактор.\n\n"
+            + final_editor_prompt(_editor_input(data), repair_notes)
+        )
+        parsed = _yandex_json(independent_prompt, "Независимый финальный редактор", temperature=0.08)
+        return _merge_editor(data, parsed, "YandexGPT/IndependentFinalEditor", YANDEX_MODEL)
 
 
 def _audit_input(data: dict) -> dict:
@@ -420,14 +459,26 @@ def _repair(data: dict, topic: dict) -> dict:
         if deterministic["ok"] and audit["verdict"] == "PASS" and audit["total_score"] >= 90 and not audit["blocking_issues"]:
             return data
 
-        parsed, requested_model, actual_model = _openrouter_json(
-            [OPENROUTER_EDITOR_MODEL, OPENROUTER_MODEL, "openrouter/free"],
-            repair_prompt(data, deterministic["problems"], audit, attempt),
-            "Senior rewrite editor",
-            0.08,
-            "Repair/OpenRouter",
-        )
-        data = _merge_editor(data, parsed, "Repair/OpenRouter", actual_model)
+        repair_input = _editor_input(data)
+        prompt = repair_prompt(repair_input, deterministic["problems"], audit, attempt)
+        try:
+            parsed, requested_model, actual_model = _openrouter_json(
+                [OPENROUTER_EDITOR_MODEL, OPENROUTER_MODEL, "openrouter/free"],
+                prompt,
+                "Senior rewrite editor",
+                0.08,
+                "Repair/OpenRouter",
+            )
+            data = _merge_editor(data, parsed, "Repair/OpenRouter", actual_model)
+        except Exception as exc:
+            log.warning("REWRITE_FALLBACK provider=YandexGPT reason=%s", exc)
+            independent_prompt = (
+                "Ты независимый старший редактор. Автор и предыдущие инструменты "
+                "намеренно не раскрываются. Исправь материал только по указанным "
+                "проблемам и не пытайся определять авторство.\n\n" + prompt
+            )
+            parsed = _yandex_json(independent_prompt, "Независимый старший редактор", temperature=0.08)
+            data = _merge_editor(data, parsed, "YandexGPT/IndependentRewriteEditor", YANDEX_MODEL)
         data["source_urls"] = _source_urls(topic)
         data["source_evidence"] = _source_evidence(topic)
         data.pop("ai_quality_audit", None)
