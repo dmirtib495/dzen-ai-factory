@@ -31,38 +31,30 @@ def reserve():
     every scheduled GitHub Actions run. Without cloud credentials, the existing
     local SQLite atomic counter is used.
     """
+    # An explicitly forced manual run bypasses only our internal D1/local
+    # accounting guard. The provider still enforces its own external limits.
+    # Do not increment ai_usage beyond 50: D1 intentionally has cap triggers.
+    if force_run_enabled():
+        return True
+
     if not cloud_enabled():
-        limit = 1_000_000_000 if force_run_enabled() else OPENROUTER_DAILY_LIMIT
-        return reserve_ai_request(limit)
+        return reserve_ai_request(OPENROUTER_DAILY_LIMIT)
 
     now = datetime.now(timezone.utc)
     day = now.date().isoformat()
 
-    if force_run_enabled():
-        result = _cloud_query(
-            """
-            INSERT INTO ai_usage(day,requests,updated_at)
-            VALUES(?,1,?)
-            ON CONFLICT(day) DO UPDATE SET
-                requests=ai_usage.requests+1,
-                updated_at=excluded.updated_at
-            RETURNING requests
-            """,
-            [day, now.isoformat()],
-        ) or {}
-    else:
-        result = _cloud_query(
-            """
-            INSERT INTO ai_usage(day,requests,updated_at)
-            VALUES(?,1,?)
-            ON CONFLICT(day) DO UPDATE SET
-                requests=ai_usage.requests+1,
-                updated_at=excluded.updated_at
-            WHERE ai_usage.requests < ?
-            RETURNING requests
-            """,
-            [day, now.isoformat(), OPENROUTER_DAILY_LIMIT],
-        ) or {}
+    result = _cloud_query(
+        """
+        INSERT INTO ai_usage(day,requests,updated_at)
+        VALUES(?,1,?)
+        ON CONFLICT(day) DO UPDATE SET
+            requests=ai_usage.requests+1,
+            updated_at=excluded.updated_at
+        WHERE ai_usage.requests < ?
+        RETURNING requests
+        """,
+        [day, now.isoformat(), OPENROUTER_DAILY_LIMIT],
+    ) or {}
     return bool(result.get('results', []))
 
 
