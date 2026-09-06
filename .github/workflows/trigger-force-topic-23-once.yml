@@ -1,4 +1,4 @@
-name: Trigger Force Topic 23 Once
+name: Trigger Force Topic 29 Once
 
 on:
   push:
@@ -17,4 +17,4 @@ jobs:
       - name: Dispatch forced approved-topic workflow
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run generate-approved-topic.yml -R dmirtib495/dzen-ai-factory -f proposal_id=23 -f force_run=true
+        run: gh workflow run generate-approved-topic.yml -R dmirtib495/dzen-ai-factory -f proposal_id=29 -f force_run=true
