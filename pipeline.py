@@ -129,6 +129,8 @@ def generate_batch():
                     generate_image_set,
                     aid,
                     chosen,
+                    article_markdown=data.get("article_markdown", ""),
+                    category=data.get("category", ""),
                     artifact_prefix="dzen-factory",
                 )
                 if not image_manifest:
