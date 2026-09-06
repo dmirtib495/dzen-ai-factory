@@ -17,7 +17,7 @@ def test_image_quota_reserves_atomically_in_d1(monkeypatch):
     assert captured['params'][2] == 172.8
     assert captured['params'][-1] == image_quota.WORKERS_AI_DAILY_NEURON_LIMIT
     assert image_quota.WORKERS_AI_DAILY_GENERATION_LIMIT == 50
-    assert round(image_quota.WORKERS_AI_DAILY_NEURON_LIMIT, 1) == 5875.2
+    assert round(image_quota.WORKERS_AI_DAILY_NEURON_LIMIT, 1) == 8640.0
     assert image_quota.WORKERS_AI_DAILY_NEURON_LIMIT < image_quota.WORKERS_AI_FREE_DAILY_NEURON_LIMIT
 
 
