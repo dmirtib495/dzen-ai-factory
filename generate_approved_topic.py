@@ -38,6 +38,17 @@ def _decode_summary(raw: str) -> tuple[str, list[dict]]:
     return brief or text, clean_sources
 
 
+def _writer_summary(brief: str, sources: list[dict]) -> str:
+    if not sources:
+        return brief
+    return (
+        brief
+        + '\n\nФАКТИЧЕСКАЯ БАЗА ДЛЯ МАТЕРИАЛА (несколько независимых исходников):\n'
+        + json.dumps(sources, ensure_ascii=False, indent=2)
+        + '\n\nИспользуй конкретные факты только из этой базы. Не придумывай отсутствующие характеристики, цены или неисправности.'
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--proposal-id', type=int, required=True)
@@ -70,18 +81,25 @@ def main() -> None:
         raise SystemExit('Topic proposal could not be claimed')
 
     editorial_summary, source_bundle = _decode_summary(str(row.get('summary') or ''))
+    summary_for_writer = _writer_summary(editorial_summary, source_bundle)
+    primary_link = str(row.get('link') or '')
+    primary_source = str(row.get('source') or '')
+    if source_bundle:
+        primary_link = str(source_bundle[0].get('url') or primary_link)
+        primary_source = str(source_bundle[0].get('source') or primary_source)
+
     topic = {
         'id': add_topic(
             str(row.get('title') or ''),
-            str(row.get('link') or ''),
-            str(row.get('source') or ''),
-            editorial_summary,
+            primary_link,
+            primary_source,
+            summary_for_writer,
             float(row.get('score') or 0),
         ),
         'title': str(row.get('title') or ''),
-        'link': str(row.get('link') or ''),
-        'source': str(row.get('source') or ''),
-        'summary': editorial_summary,
+        'link': primary_link,
+        'source': primary_source,
+        'summary': summary_for_writer,
         'score': float(row.get('score') or 0),
         'source_bundle': source_bundle,
     }
