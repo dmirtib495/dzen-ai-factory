@@ -1,8 +1,8 @@
-def test_adaptive_image_set_uses_largest_affordable_count(monkeypatch):
+def test_exact_image_set_reserves_five(monkeypatch):
     import image_batch
 
     cost = image_batch.FLUX_SCHNELL_NEURONS_PER_IMAGE
-    monkeypatch.setattr(image_batch, 'image_quota_status', lambda: {'remaining': cost * 4.2})
+    monkeypatch.setattr(image_batch, 'image_quota_status', lambda: {'remaining': cost * 5.2})
     reservations = []
 
     def reserve(amount):
@@ -10,39 +10,38 @@ def test_adaptive_image_set_uses_largest_affordable_count(monkeypatch):
         return True
 
     monkeypatch.setattr(image_batch, 'reserve_neurons', reserve)
-    assert image_batch._reserve_adaptive_set() == 4
-    assert reservations == [cost * 4]
+    assert image_batch._reserve_exact_set() == 5
+    assert reservations == [cost * 5]
 
 
-def test_adaptive_image_set_steps_down_after_reservation_race(monkeypatch):
+def test_exact_image_set_refuses_when_five_are_not_affordable(monkeypatch):
     import image_batch
 
     cost = image_batch.FLUX_SCHNELL_NEURONS_PER_IMAGE
-    monkeypatch.setattr(image_batch, 'image_quota_status', lambda: {'remaining': cost * 4.5})
-    reservations = []
-
-    def reserve(amount):
-        reservations.append(amount)
-        return len(reservations) == 2
-
-    monkeypatch.setattr(image_batch, 'reserve_neurons', reserve)
-    assert image_batch._reserve_adaptive_set() == 3
-    assert reservations == [cost * 4, cost * 3]
-
-
-def test_adaptive_image_set_refuses_less_than_three(monkeypatch):
-    import image_batch
-
-    cost = image_batch.FLUX_SCHNELL_NEURONS_PER_IMAGE
-    monkeypatch.setattr(image_batch, 'image_quota_status', lambda: {'remaining': cost * 2.9})
+    monkeypatch.setattr(image_batch, 'image_quota_status', lambda: {'remaining': cost * 4.99})
     monkeypatch.setattr(image_batch, 'reserve_neurons', lambda amount: True)
 
     try:
-        image_batch._reserve_adaptive_set()
+        image_batch._reserve_exact_set()
     except RuntimeError as exc:
-        assert 'минимального набора' in str(exc)
+        assert 'обязательного набора из 5 изображений' in str(exc)
     else:
-        raise AssertionError('Expected RuntimeError when fewer than three images are affordable')
+        raise AssertionError('Expected RuntimeError when five images are not affordable')
+
+
+def test_exact_image_set_refuses_failed_atomic_reservation(monkeypatch):
+    import image_batch
+
+    cost = image_batch.FLUX_SCHNELL_NEURONS_PER_IMAGE
+    monkeypatch.setattr(image_batch, 'image_quota_status', lambda: {'remaining': cost * 6})
+    monkeypatch.setattr(image_batch, 'reserve_neurons', lambda amount: False)
+
+    try:
+        image_batch._reserve_exact_set()
+    except RuntimeError as exc:
+        assert 'атомарно зарезервировать' in str(exc)
+    else:
+        raise AssertionError('Expected RuntimeError when atomic reservation loses a race')
 
 
 def test_document_package_accepts_three_to_five_images():
