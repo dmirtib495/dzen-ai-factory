@@ -1,0 +1,20 @@
+name: Generate Images For Article 13 Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/generate-article-13-images-once.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch adaptive image set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run image-batch.yml -R dmirtib495/dzen-ai-factory -f article_id=13
