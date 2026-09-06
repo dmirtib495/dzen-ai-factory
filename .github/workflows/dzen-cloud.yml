@@ -8,10 +8,6 @@ on:
         description: 'Who requested topic selection'
         required: false
         default: 'manual-ui'
-  schedule:
-    - cron: "0 3 * * *"
-    - cron: "0 9 * * *"
-    - cron: "0 15 * * *"
 
 permissions:
   contents: read
