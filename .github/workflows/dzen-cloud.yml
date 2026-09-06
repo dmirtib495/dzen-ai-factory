@@ -52,7 +52,7 @@ jobs:
         run: |
           {
             echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-            echo "DEEPSEEK_MODEL=google/gemma-4-31b-it:free"
+            echo "DEEPSEEK_MODEL=openrouter/free"
             echo "OPENROUTER_MODEL=openrouter/free"
             echo "OPENROUTER_EDITOR_MODEL=nvidia/nemotron-3-super-120b-a12b:free"
             echo "YANDEX_API_KEY=$YANDEX_API_KEY"
@@ -101,7 +101,7 @@ jobs:
         run: |
           python - <<'PY'
           import requests
-          wanted=['google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','openrouter/free']
+          wanted=['openrouter/free','nvidia/nemotron-3-super-120b-a12b:free']
           models=requests.get('https://openrouter.ai/api/v1/models',timeout=30).json()['data']
           by_id={m['id']:m for m in models}
           for mid in wanted:
@@ -124,8 +124,10 @@ jobs:
           t=text_status(); i=image_status()
           print('TEXT_QUOTA', t)
           print('IMAGE_QUOTA', i)
+          # A healthy one-article path now needs about 3 OpenRouter calls:
+          # draft, final editor and independent audit. Keep a 6-call safety buffer.
           can_run = (
-              int(t.get('remaining', 0)) >= 10 and
+              int(t.get('remaining', 0)) >= 6 and
               float(i.get('remaining', 0)) + 1e-6 >= 3 * FLUX_SCHNELL_NEURONS_PER_IMAGE
           )
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
