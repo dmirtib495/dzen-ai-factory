@@ -50,7 +50,7 @@ def _vehicle_mentions(text: str) -> list[str]:
         "Toyota|Honda|Nissan|Mazda|Mitsubishi|Subaru|Suzuki|Lexus|Infiniti|Acura|"
         "Hyundai|Kia|Genesis|Ford|Chevrolet|Cadillac|Jeep|Tesla|Volkswagen|Audi|"
         "BMW|Mercedes(?:-Benz)?|Porsche|Volvo|Skoda|Renault|Peugeot|Citroen|Fiat|"
-        "Land Rover|Range Rover|Geely|Chery|Haval|Exeed|Changan|Li Auto|Zeekr|BYD|"
+        "Land Rover|Range Rover|Geely|Chery|Haval|Exeed|Changan|Li Auto|Zeekr|BYD|Xiaomi|"
         "Lada|УАЗ|ГАЗ"
     )
     pattern = re.compile(
@@ -134,18 +134,39 @@ def editorial_prompts(
         ]
         return prompts[:count]
 
-    subject = subjects[0] if subjects else (headline or "the exact car model discussed in the article").strip()[:220]
-    base = rules + (
-        f"Main subject: {subject}. The vehicle model and generation must match the named subject accurately. "
+    is_electric_vehicle_topic = bool(re.search(
+        r"электромобил|электрокар|зарядн(?:ая|ые|ой|ую|ых)|electric vehicle|\\bev\\b",
+        context,
+        re.I,
+    ))
+    if subjects:
+        subject = subjects[0]
+    elif is_electric_vehicle_topic:
+        subject = "pearl white Tesla Model 3, current production body"
+    else:
+        subject = (headline or "the exact car model discussed in the article").strip()[:220]
+
+    continuity = (
+        f"Main subject in every frame: the exact same {subject}. Keep identical body shape, paint color, "
+        "wheel design and generation throughout the complete set. The vehicle must remain clearly visible. "
     )
-    scenes = [
-        "Hero image, front three-quarter exterior view on a clean urban road, soft natural daylight.",
-        "Rear three-quarter exterior view on a real road, natural daylight, realistic reflections.",
-        "Side profile parked near modern architecture, neutral daylight, full vehicle visible.",
-        "Interior cockpit view from the rear seats looking forward, realistic dashboard and steering wheel.",
-        "Practical ownership scene at a parking or service area, vehicle clearly visible, editorial photojournalism.",
-    ]
-    return [base + scene for scene in scenes[:count]]
+    if is_electric_vehicle_topic:
+        scenes = [
+            "Moscow ownership scene: front three-quarter view beside a public curbside charging station, recognizable modern Moscow streetscape, mild daylight.",
+            "Winter operation scene: the same car parked outdoors in a snowy Moscow residential area, light frost, realistic cold weather, no dramatic blizzard.",
+            "Highway charging scene: the same car at a clean intercity motorway charging stop during a long trip, charging cable connected, practical documentary angle.",
+            "Seaside road-trip scene: the same car at a safe coastal rest stop near the Black Sea, luggage visible through an open trunk, natural summer daylight.",
+            "Used-car inspection scene: the same car in a clean service bay, owner and technician checking charging port, tires and underbody, editorial photojournalism.",
+        ]
+    else:
+        scenes = [
+            "Hero image, front three-quarter exterior view on a clean urban road, soft natural daylight.",
+            "Rear three-quarter exterior view on a real road, natural daylight, realistic reflections.",
+            "Side profile parked near modern architecture, neutral daylight, full vehicle visible.",
+            "Interior cockpit view from the rear seats looking forward, realistic dashboard and steering wheel.",
+            "Practical ownership scene at a parking or service area, vehicle clearly visible, editorial photojournalism.",
+        ]
+    return [rules + continuity + scene for scene in scenes[:count]]
 
 def generate_cloudflare_image(prompt: str, output_path: str | Path, *, quota_reserved: bool = False) -> dict:
     """Generate one 1024x1024 FLUX Schnell JPEG and return measured usage."""
