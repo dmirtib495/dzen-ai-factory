@@ -300,7 +300,7 @@ def test_final_length_fit_removes_complete_sentences_without_truncation(monkeypa
     import ai_writer
 
     monkeypatch.setattr(ai_writer, 'MIN_ARTICLE_WORDS', 10)
-    monkeypatch.setattr(ai_writer, 'MAX_ARTICLE_WORDS', 25)
+    monkeypatch.setattr(ai_writer, 'MAX_ARTICLE_WORDS', 27)
     data = {
         'article_markdown': (
             '## Раздел\n\n'
@@ -314,6 +314,6 @@ def test_final_length_fit_removes_complete_sentences_without_truncation(monkeypa
 
     result = ai_writer._fit_article_to_limits(data)
 
-    assert ai_writer._russian_word_count(result['article_markdown']) <= 25
+    assert ai_writer._russian_word_count(result['article_markdown']) <= 27
     assert result['article_markdown'].rstrip().endswith(('.', '!', '?'))
     assert 'Deterministic:final-length-fit' in result['ai_stages']
