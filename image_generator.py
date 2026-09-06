@@ -214,9 +214,14 @@ ARTICLE:
             if first.lower() not in joined or second.lower() not in joined or both < min(3, count):
                 raise ValueError("visual comparison plan does not balance both vehicles")
         log.info("YANDEX_VISUAL_PLAN_OK scenes=%s sections=%s subject=%s", count, sorted(section_ids), subject)
+        print(
+            f"YANDEX_VISUAL_PLAN_OK scenes={count} "
+            f"sections={','.join(str(x) for x in sorted(section_ids))} subject={subject}"
+        )
         return valid
     except Exception as exc:
         log.warning("YANDEX_VISUAL_PLAN_FALLBACK reason=%s", exc)
+        print(f"YANDEX_VISUAL_PLAN_FALLBACK reason={exc}")
         return None
 
 
