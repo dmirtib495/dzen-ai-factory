@@ -29,10 +29,6 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   updated_at TEXT NOT NULL
 );
 
--- Defense in depth: even an old/replayed workflow must not be able to push
--- the shared OpenRouter daily counter above the accepted free-tier ceiling.
--- Existing legacy rows above 50 are intentionally left untouched; the UTC day
--- key rolls over naturally and new writes are protected by these triggers.
 CREATE TRIGGER IF NOT EXISTS ai_usage_cap_insert
 BEFORE INSERT ON ai_usage
 WHEN NEW.requests > 50
@@ -83,8 +79,6 @@ CREATE TABLE IF NOT EXISTS article_packages (
 );
 CREATE INDEX IF NOT EXISTS idx_article_packages_day ON article_packages(package_day, status);
 
--- One row per approved batch prevents concurrent/replayed finalizers from
--- sending the same individual article ZIP to Telegram more than once.
 CREATE TABLE IF NOT EXISTS article_package_deliveries (
   article_id INTEGER NOT NULL,
   batch_id INTEGER NOT NULL,
@@ -105,6 +99,37 @@ CREATE TABLE IF NOT EXISTS daily_packages (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS topic_proposal_groups (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'pending',
+  selected_proposal_id INTEGER,
+  telegram_message_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_topic_proposal_groups_status
+ON topic_proposal_groups(status, created_at);
+
+CREATE TABLE IF NOT EXISTS topic_proposals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  link TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  score REAL NOT NULL DEFAULT 0,
+  trend_title TEXT NOT NULL DEFAULT '',
+  trend_views INTEGER NOT NULL DEFAULT 0,
+  trend_channel TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(group_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_topic_proposals_group ON topic_proposals(group_id, position);
+CREATE INDEX IF NOT EXISTS idx_topic_proposals_status ON topic_proposals(status, created_at);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
