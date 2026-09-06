@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import datetime
 import io
+import json
+import logging
 import os
 import re
 import textwrap
@@ -17,6 +19,8 @@ OUT = Path('data/images')
 OUT.mkdir(parents=True, exist_ok=True)
 FLUX_MODEL = '@cf/black-forest-labs/flux-1-schnell'
 FLUX_STEPS = 4
+
+log = logging.getLogger(__name__)
 
 
 def make_cover(title, category='Авто'):
@@ -82,6 +86,168 @@ def _vehicle_mentions(text: str) -> list[str]:
     ]
 
 
+def _article_sections(article_markdown: str) -> list[dict]:
+    """Return numbered article sections so every visual can cite its editorial source."""
+    matches = list(re.finditer(r"^##\\s+(.+?)\\s*$", article_markdown or "", re.M))
+    sections = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(article_markdown or "")
+        body = (article_markdown or "")[match.end():end].strip()
+        sections.append({
+            "index": index + 1,
+            "heading": match.group(1).strip(),
+            "body": body[:1800],
+        })
+    return sections
+
+
+def _extract_json_object(text: str):
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\\s*|\\s*```$", "", raw, flags=re.I | re.S)
+    try:
+        return json.loads(raw)
+    except Exception:
+        match = re.search(r"\\{.*\\}", raw, re.S)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+
+
+def _yandex_visual_plan(
+    headline: str,
+    article_markdown: str,
+    *,
+    count: int,
+    subject: str,
+    comparison_subjects: list[str],
+) -> list[dict] | None:
+    """Ask one visual editor call to map images to actual article sections."""
+    api_key = os.getenv("YANDEX_API_KEY", "").strip()
+    folder_id = os.getenv("YANDEX_FOLDER_ID", "").strip()
+    model = os.getenv("YANDEX_MODEL", "yandexgpt/latest").strip() or "yandexgpt/latest"
+    if not api_key or not folder_id or "placeholder" in api_key.lower() or "placeholder" in folder_id.lower():
+        return None
+
+    sections = _article_sections(article_markdown)
+    if not sections:
+        return None
+    comparison_rule = (
+        f"The set compares {comparison_subjects[0]} and {comparison_subjects[1]}. "
+        "Scene one must show both equally; include one individual scene for each; "
+        "at least three scenes must show both as clearly separate vehicles."
+        if len(comparison_subjects) >= 2 else
+        f"Every scene must show the exact same {subject}, with identical generation, body, paint and wheels."
+    )
+    prompt = f"""You are the visual editor of an automotive publication.
+Create exactly {count} distinct English photo prompts for the supplied Russian article.
+
+ARTICLE HEADLINE:
+{headline}
+
+FIXED VISUAL SUBJECT:
+{subject}
+
+ARTICLE SECTIONS:
+{json.dumps(sections, ensure_ascii=False)}
+
+RULES:
+- Every scene must illustrate a concrete situation from one listed section, not a generic car portrait.
+- Use different section_index values whenever the article has enough sections.
+- The action, location, season and ownership task must agree with that section's text.
+- {comparison_rule}
+- Do not add another make/model, accident, failure, weather extreme or technical operation absent from the article.
+- Photorealistic editorial automotive photo, natural light, plausible Russian environment where relevant.
+- No readable text, logos, watermark, invented badges, collage, split screen or fantasy elements.
+- Keep the complete vehicle visible unless the chosen section specifically requires a detail inspection.
+
+Return only JSON:
+{{"scenes":[{{"section_index":1,"prompt":"English visual description"}}]}}
+
+ARTICLE:
+{(article_markdown or "")[:14000]}"""
+    try:
+        response = requests.post(
+            "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+            headers={"Authorization": f"Api-Key {api_key}", "Content-Type": "application/json"},
+            json={
+                "modelUri": f"gpt://{folder_id}/{model}",
+                "completionOptions": {"stream": False, "temperature": 0.08, "maxTokens": 3500},
+                "messages": [
+                    {"role": "system", "text": "You are a strict automotive visual editor. Return valid JSON only."},
+                    {"role": "user", "text": prompt},
+                ],
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        parsed = _extract_json_object(response.json()["result"]["alternatives"][0]["message"]["text"])
+        scenes = parsed.get("scenes") if isinstance(parsed, dict) else None
+        if not isinstance(scenes, list) or len(scenes) != count:
+            raise ValueError("visual planner returned wrong scene count")
+
+        valid = []
+        section_ids = set()
+        for item in scenes:
+            if not isinstance(item, dict):
+                raise ValueError("visual planner scene is not an object")
+            section_index = int(item.get("section_index", 0))
+            scene_prompt = str(item.get("prompt", "")).strip()
+            if not (1 <= section_index <= len(sections)) or len(scene_prompt) < 80:
+                raise ValueError("visual planner returned invalid section or short prompt")
+            valid.append({
+                "section_index": section_index,
+                "section_heading": sections[section_index - 1]["heading"],
+                "prompt": scene_prompt,
+            })
+            section_ids.add(section_index)
+        if len(section_ids) < min(count, len(sections)):
+            raise ValueError("visual planner repeated sections despite available article material")
+
+        joined = "\n".join(item["prompt"].lower() for item in valid)
+        if len(comparison_subjects) >= 2:
+            first, second = comparison_subjects[:2]
+            both = sum(first.lower() in item["prompt"].lower() and second.lower() in item["prompt"].lower() for item in valid)
+            if first.lower() not in joined or second.lower() not in joined or both < min(3, count):
+                raise ValueError("visual comparison plan does not balance both vehicles")
+        log.info("YANDEX_VISUAL_PLAN_OK scenes=%s sections=%s subject=%s", count, sorted(section_ids), subject)
+        return valid
+    except Exception as exc:
+        log.warning("YANDEX_VISUAL_PLAN_FALLBACK reason=%s", exc)
+        return None
+
+
+def _render_visual_plan(
+    plan: list[dict] | None,
+    *,
+    rules: str,
+    subject: str,
+    comparison_subjects: list[str],
+) -> list[str] | None:
+    if not plan:
+        return None
+    continuity = (
+        f"Keep these two exact vehicles visually consistent and separate throughout the set: "
+        f"{comparison_subjects[0]} and {comparison_subjects[1]}. "
+        if len(comparison_subjects) >= 2 else
+        f"Main subject in every frame: the exact same {subject}. Keep identical generation, body shape, "
+        "paint color and wheel design throughout the complete set. "
+    )
+    prompts = []
+    for item in plan:
+        scene = item["prompt"]
+        if len(comparison_subjects) < 2 and subject.lower() not in scene.lower():
+            scene = f"{subject}. {scene}"
+        prompts.append(
+            rules + continuity +
+            f"Editorial source section: {item['section_heading']}. " + scene
+        )
+    return prompts
+
+
 def editorial_prompts(
     headline: str,
     count: int = 5,
@@ -109,6 +275,20 @@ def editorial_prompts(
     )
     if is_comparison:
         first, second = subjects[:2]
+        planned = _render_visual_plan(
+            _yandex_visual_plan(
+                headline,
+                article_markdown,
+                count=count,
+                subject=f"{first} and {second}",
+                comparison_subjects=[first, second],
+            ),
+            rules=rules,
+            subject=f"{first} and {second}",
+            comparison_subjects=[first, second],
+        )
+        if planned:
+            return planned
         prompts = [
             rules + (
                 f"Honest comparison cover: two clearly separate real vehicles, {first} on the left and "
@@ -150,6 +330,20 @@ def editorial_prompts(
         f"Main subject in every frame: the exact same {subject}. Keep identical body shape, paint color, "
         "wheel design and generation throughout the complete set. The vehicle must remain clearly visible. "
     )
+    planned = _render_visual_plan(
+        _yandex_visual_plan(
+            headline,
+            article_markdown,
+            count=count,
+            subject=subject,
+            comparison_subjects=[],
+        ),
+        rules=rules,
+        subject=subject,
+        comparison_subjects=[],
+    )
+    if planned:
+        return planned
     if is_electric_vehicle_topic:
         scenes = [
             "Moscow ownership scene: front three-quarter view beside a public curbside charging station, recognizable modern Moscow streetscape, mild daylight.",
