@@ -1,6 +1,7 @@
 name: Retry Custom Topic 46 Once
 
 # Retry after editorial evidence safeguards
+# Retry after coherent source-free rewrite
 
 on:
   push:
