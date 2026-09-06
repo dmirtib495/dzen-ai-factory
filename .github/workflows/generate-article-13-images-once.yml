@@ -1,5 +1,7 @@
 name: Generate Images For Article 13 Once
 
+# Regenerate with consistent Tesla scenes
+
 on:
   push:
     branches: [main]
