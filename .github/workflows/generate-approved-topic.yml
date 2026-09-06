@@ -7,6 +7,10 @@ on:
       proposal_id:
         description: 'Approved topic proposal ID'
         required: true
+      force_run:
+        description: 'Explicitly bypass the 6-request preflight reserve (hard shared quota still applies)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -74,21 +78,27 @@ jobs:
         run: python cloud/init_d1.py
       - name: Shared daily quota preflight
         id: quota
+        env:
+          FORCE_RUN: ${{ inputs.force_run }}
         run: |
           python - <<'PY'
           import os
           from quota import status as text_status
           from image_quota import status as image_status, FLUX_SCHNELL_NEURONS_PER_IMAGE
           t=text_status(); i=image_status()
+          force = os.getenv('FORCE_RUN', '').strip().lower() == 'true'
           print('TEXT_QUOTA', t)
           print('IMAGE_QUOTA', i)
-          can_run = (
-              int(t.get('remaining', 0)) >= 6 and
-              float(i.get('remaining', 0)) + 1e-6 >= 3 * FLUX_SCHNELL_NEURONS_PER_IMAGE
-          )
+          print('FORCE_RUN', force)
+          image_ok = float(i.get('remaining', 0)) + 1e-6 >= 3 * FLUX_SCHNELL_NEURONS_PER_IMAGE
+          text_ok = int(t.get('remaining', 0)) >= 6
+          can_run = image_ok and (text_ok or force)
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               fh.write(f"can_run={'true' if can_run else 'false'}\n")
-          print('PRODUCTION_QUOTA_OK' if can_run else 'PRODUCTION_SKIPPED_BY_SHARED_DAILY_QUOTA')
+          if can_run and force and not text_ok:
+              print('PRODUCTION_FORCE_RUN_BELOW_TEXT_PREFLIGHT_RESERVE')
+          else:
+              print('PRODUCTION_QUOTA_OK' if can_run else 'PRODUCTION_SKIPPED_BY_SHARED_DAILY_QUOTA')
           PY
       - name: Sync cloud database
         run: python cloud_sync.py
