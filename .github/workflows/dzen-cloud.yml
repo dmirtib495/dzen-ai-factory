@@ -1,11 +1,11 @@
 name: Dzen AI Factory - Cloud
-run-name: Dzen AI Factory - Cloud [${{ github.event.inputs.trigger_source || 'schedule' }}]
+run-name: Dzen AI Factory - Topic Choice [${{ github.event.inputs.trigger_source || 'schedule' }}]
 
 on:
   workflow_dispatch:
     inputs:
       trigger_source:
-        description: 'Who triggered this run'
+        description: 'Who requested topic selection'
         required: false
         default: 'manual-ui'
   schedule:
@@ -17,13 +17,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: dzen-ai-factory-production
+  group: dzen-ai-factory-topic-proposals
   cancel-in-progress: false
 
 jobs:
-  generate:
+  propose:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -40,124 +40,26 @@ jobs:
           pip install -r requirements.txt
       - name: Create environment file
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
-          YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
         run: |
           {
-            echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-            echo "DEEPSEEK_MODEL=openrouter/free"
-            echo "OPENROUTER_MODEL=openrouter/free"
-            echo "OPENROUTER_EDITOR_MODEL=nvidia/nemotron-3-super-120b-a12b:free"
-            echo "YANDEX_API_KEY=$YANDEX_API_KEY"
-            echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
-            echo "YANDEX_MODEL=yandexgpt/latest"
             echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
             echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
             echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
-            echo "CLOUDFLARE_AI_API_TOKEN=$CLOUDFLARE_AI_API_TOKEN"
             echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
             echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
             echo "ARTICLES_PER_DAY=1"
-            echo "OPENROUTER_DAILY_LIMIT=50"
             echo "TIMEZONE=Europe/Moscow"
-            echo "SCHEDULE_HOURS=6,12,18"
-            echo "MIN_ARTICLE_WORDS=900"
-            echo "MAX_ARTICLE_WORDS=1400"
           } > .env
       - name: Validate Python sources
         run: python -m compileall -q .
-      - name: Validate configuration
-        run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
-      - name: Require Yandex AI credentials
-        run: |
-          python - <<'PY'
-          import os
-          from dotenv import load_dotenv
-          load_dotenv('.env')
-          missing = [k for k in ('YANDEX_API_KEY','YANDEX_FOLDER_ID') if not os.getenv(k,'').strip()]
-          if missing:
-              raise SystemExit('Missing required Yandex AI secrets: ' + ', '.join(missing))
-          print('Yandex AI credentials: present')
-          PY
-      - name: Require dedicated Workers AI credentials
-        run: |
-          python - <<'PY'
-          import os
-          from dotenv import load_dotenv
-          load_dotenv('.env')
-          missing = [k for k in ('CLOUDFLARE_AI_API_TOKEN','CLOUDFLARE_ACCOUNT_ID') if not os.getenv(k,'').strip()]
-          if missing:
-              raise SystemExit('Missing Workers AI secrets: ' + ', '.join(missing))
-          print('Workers AI credentials: present')
-          PY
-      - name: Report OpenRouter model availability
-        run: |
-          python - <<'PY'
-          import requests
-          wanted=['openrouter/free','nvidia/nemotron-3-super-120b-a12b:free']
-          models=requests.get('https://openrouter.ai/api/v1/models',timeout=30).json()['data']
-          by_id={m['id']:m for m in models}
-          for mid in wanted:
-              m=by_id.get(mid)
-              if not m:
-                  print('openrouter_model=',mid,'status=MISSING; code will fall back to next model')
-                  continue
-              p=m.get('pricing') or {}
-              print('openrouter_model=',mid,'status=LIVE','context=',m.get('context_length'),'pricing=',p,'response_format=', 'response_format' in (m.get('supported_parameters') or []))
-          PY
       - name: Initialize Cloudflare D1
         run: python cloud/init_d1.py
-      - name: Shared daily quota preflight
-        id: quota
-        run: |
-          python - <<'PY'
-          import os
-          from quota import status as text_status
-          from image_quota import status as image_status, FLUX_SCHNELL_NEURONS_PER_IMAGE
-          t=text_status(); i=image_status()
-          print('TEXT_QUOTA', t)
-          print('IMAGE_QUOTA', i)
-          # A healthy one-article path now needs about 3 OpenRouter calls:
-          # draft, final editor and independent audit. Keep a 6-call safety buffer.
-          can_run = (
-              int(t.get('remaining', 0)) >= 6 and
-              float(i.get('remaining', 0)) + 1e-6 >= 3 * FLUX_SCHNELL_NEURONS_PER_IMAGE
-          )
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
-              fh.write(f"can_run={'true' if can_run else 'false'}\n")
-          print('PRODUCTION_QUOTA_OK' if can_run else 'PRODUCTION_SKIPPED_BY_SHARED_DAILY_QUOTA')
-          PY
       - name: Sync cloud database
         run: python cloud_sync.py
-      - name: Generate article and review image set
-        if: steps.quota.outputs.can_run == 'true'
-        run: python main.py --once
-      - name: Sync results to Cloudflare D1
-        if: always()
-        run: python cloud_sync.py
-      - name: Verify latest Cloudflare D1 article
-        if: always()
-        run: |
-          python - <<'PY'
-          from dotenv import load_dotenv
-          load_dotenv('.env')
-          from cloud_sync import query
-          result=query("SELECT * FROM articles ORDER BY id DESC LIMIT 1") or {}
-          rows=result.get('results',[])
-          print('d1_latest_article=', rows[0] if rows else None)
-          PY
-      - name: Upload generated artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dzen-factory-${{ github.run_number }}
-          path: data/
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Select fresh topic candidates and ask in Telegram
+        run: python propose_topics.py
