@@ -1,0 +1,108 @@
+name: Generate Approved Topic
+run-name: Generate Approved Topic #${{ inputs.proposal_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      proposal_id:
+        description: 'Approved topic proposal ID'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dzen-ai-factory-production
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Create environment file
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+          YANDEX_FOLDER_ID: ${{ secrets.YANDEX_FOLDER_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_AI_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+        run: |
+          {
+            echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+            echo "DEEPSEEK_MODEL=openrouter/free"
+            echo "OPENROUTER_MODEL=openrouter/free"
+            echo "OPENROUTER_EDITOR_MODEL=nvidia/nemotron-3-super-120b-a12b:free"
+            echo "YANDEX_API_KEY=$YANDEX_API_KEY"
+            echo "YANDEX_FOLDER_ID=$YANDEX_FOLDER_ID"
+            echo "YANDEX_MODEL=yandexgpt/latest"
+            echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
+            echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
+            echo "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
+            echo "CLOUDFLARE_AI_API_TOKEN=$CLOUDFLARE_AI_API_TOKEN"
+            echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
+            echo "CLOUDFLARE_D1_DATABASE_ID=$CLOUDFLARE_D1_DATABASE_ID"
+            echo "ARTICLES_PER_DAY=1"
+            echo "OPENROUTER_DAILY_LIMIT=50"
+            echo "TIMEZONE=Europe/Moscow"
+            echo "MIN_ARTICLE_WORDS=900"
+            echo "MAX_ARTICLE_WORDS=1400"
+          } > .env
+      - name: Validate Python sources
+        run: python -m compileall -q .
+      - name: Validate configuration
+        run: python -c "from config import validate; e=validate(); print('config:', 'OK' if not e else e); raise SystemExit(1 if e else 0)"
+      - name: Initialize Cloudflare D1
+        run: python cloud/init_d1.py
+      - name: Shared daily quota preflight
+        id: quota
+        run: |
+          python - <<'PY'
+          import os
+          from quota import status as text_status
+          from image_quota import status as image_status, FLUX_SCHNELL_NEURONS_PER_IMAGE
+          t=text_status(); i=image_status()
+          print('TEXT_QUOTA', t)
+          print('IMAGE_QUOTA', i)
+          can_run = (
+              int(t.get('remaining', 0)) >= 6 and
+              float(i.get('remaining', 0)) + 1e-6 >= 3 * FLUX_SCHNELL_NEURONS_PER_IMAGE
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write(f"can_run={'true' if can_run else 'false'}\n")
+          print('PRODUCTION_QUOTA_OK' if can_run else 'PRODUCTION_SKIPPED_BY_SHARED_DAILY_QUOTA')
+          PY
+      - name: Sync cloud database
+        run: python cloud_sync.py
+      - name: Generate only the Telegram-approved topic
+        if: steps.quota.outputs.can_run == 'true'
+        run: python generate_approved_topic.py --proposal-id "${{ inputs.proposal_id }}"
+      - name: Sync results to Cloudflare D1
+        if: always()
+        run: python cloud_sync.py
+      - name: Upload generated artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: approved-topic-${{ inputs.proposal_id }}-${{ github.run_number }}
+          path: data/
+          if-no-files-found: ignore
+          retention-days: 7
