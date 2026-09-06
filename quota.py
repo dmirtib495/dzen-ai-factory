@@ -16,6 +16,10 @@ def _cloud_query(sql, params=None):
     return query(sql, params or [])
 
 
+def force_run_enabled():
+    return os.getenv('FORCE_RUN', '').strip().lower() == 'true'
+
+
 def reserve():
     """Atomically reserve one OpenRouter request from the shared daily budget.
 
@@ -28,23 +32,37 @@ def reserve():
     local SQLite atomic counter is used.
     """
     if not cloud_enabled():
-        return reserve_ai_request(OPENROUTER_DAILY_LIMIT)
+        limit = 1_000_000_000 if force_run_enabled() else OPENROUTER_DAILY_LIMIT
+        return reserve_ai_request(limit)
 
     now = datetime.now(timezone.utc)
     day = now.date().isoformat()
 
-    result = _cloud_query(
-        """
-        INSERT INTO ai_usage(day,requests,updated_at)
-        VALUES(?,1,?)
-        ON CONFLICT(day) DO UPDATE SET
-            requests=ai_usage.requests+1,
-            updated_at=excluded.updated_at
-        WHERE ai_usage.requests < ?
-        RETURNING requests
-        """,
-        [day, now.isoformat(), OPENROUTER_DAILY_LIMIT],
-    ) or {}
+    if force_run_enabled():
+        result = _cloud_query(
+            """
+            INSERT INTO ai_usage(day,requests,updated_at)
+            VALUES(?,1,?)
+            ON CONFLICT(day) DO UPDATE SET
+                requests=ai_usage.requests+1,
+                updated_at=excluded.updated_at
+            RETURNING requests
+            """,
+            [day, now.isoformat()],
+        ) or {}
+    else:
+        result = _cloud_query(
+            """
+            INSERT INTO ai_usage(day,requests,updated_at)
+            VALUES(?,1,?)
+            ON CONFLICT(day) DO UPDATE SET
+                requests=ai_usage.requests+1,
+                updated_at=excluded.updated_at
+            WHERE ai_usage.requests < ?
+            RETURNING requests
+            """,
+            [day, now.isoformat(), OPENROUTER_DAILY_LIMIT],
+        ) or {}
     return bool(result.get('results', []))
 
 
