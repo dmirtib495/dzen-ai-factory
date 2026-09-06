@@ -1,6 +1,7 @@
 name: Generate Images For Article 13 Once
 
 # Regenerate with consistent Tesla scenes
+# Verify section-aware Yandex visual plan
 
 on:
   push:
