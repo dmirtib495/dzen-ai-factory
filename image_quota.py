@@ -2,11 +2,11 @@ import os
 from datetime import datetime, timezone
 
 # Cloudflare Free currently provides 10,000 neurons/day. The factory
-# deliberately uses only 34 FLUX Schnell generations/day at the measured
-# 172.8 neurons each, leaving >40% headroom for diagnostics/provider drift.
+# caps itself at 50 FLUX Schnell generations/day at the measured
+# 172.8 neurons each (8,640 neurons), remaining below the 10,000 free allocation.
 WORKERS_AI_FREE_DAILY_NEURON_LIMIT = 10_000.0
 FLUX_SCHNELL_NEURONS_PER_IMAGE = 172.8
-WORKERS_AI_DAILY_GENERATION_LIMIT = 34
+WORKERS_AI_DAILY_GENERATION_LIMIT = 50
 WORKERS_AI_DAILY_NEURON_LIMIT = (
     FLUX_SCHNELL_NEURONS_PER_IMAGE * WORKERS_AI_DAILY_GENERATION_LIMIT
 )
