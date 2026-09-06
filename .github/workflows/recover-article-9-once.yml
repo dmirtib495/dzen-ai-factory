@@ -1,4 +1,4 @@
-name: Recover Approved Article 9 Once
+name: Recover Latest Approved Package Once
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: recover-approved-article-9-once
+  group: recover-approved-batch-3-once
   cancel-in-progress: false
 
 jobs:
@@ -35,18 +35,40 @@ jobs:
         run: pip install -r requirements.txt
       - name: Initialize D1 schema
         run: python cloud/init_d1.py
+      - name: Resolve approved batch 3 article
+        id: batch
+        run: |
+          python - <<'PY'
+          import os
+          from cloud_sync import query
+          result = query("SELECT id,article_id,status,source_run_id,artifact_name FROM image_batches WHERE id=3") or {}
+          rows = result.get('results', [])
+          if not rows:
+              raise SystemExit('image batch 3 not found')
+          row = rows[0]
+          print('RECOVERY_BATCH', row)
+          if row.get('status') != 'approved':
+              raise SystemExit(f"batch 3 is not approved: {row.get('status')}")
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write(f"article_id={int(row['article_id'])}\n")
+              fh.write(f"source_run_id={row['source_run_id']}\n")
+          PY
       - name: Download original approved source artifacts
         uses: actions/download-artifact@v4
         with:
           path: source-artifact
-          run-id: 34025650807
+          run-id: ${{ steps.batch.outputs.source_run_id }}
           github-token: ${{ github.token }}
-      - name: Build approved article 9 DOCX and ZIP
-        run: python finalize_article_package.py --article-id 9 --batch-id 2 --source-root source-artifact
+      - name: Build approved DOCX and ZIP
+        run: >-
+          python finalize_article_package.py
+          --article-id '${{ steps.batch.outputs.article_id }}'
+          --batch-id 3
+          --source-root source-artifact
       - name: Upload recovered package
         uses: actions/upload-artifact@v4
         with:
-          name: recovered-article-package-9-2
+          name: recovered-article-package-${{ steps.batch.outputs.article_id }}-3
           path: data/packages/*.zip
           if-no-files-found: error
           retention-days: 7
