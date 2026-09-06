@@ -23,7 +23,7 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
