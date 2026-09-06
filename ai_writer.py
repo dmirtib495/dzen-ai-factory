@@ -16,6 +16,8 @@ from config import (
     YANDEX_API_KEY,
     YANDEX_FOLDER_ID,
     YANDEX_MODEL,
+    MIN_ARTICLE_WORDS,
+    MAX_ARTICLE_WORDS,
 )
 from editorial_prompts import (
     EDITORIAL_SYSTEM,
@@ -488,6 +490,51 @@ def _repair(data: dict, topic: dict) -> dict:
     return data
 
 
+
+def _russian_word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-zА-Яа-яЁё0-9]+(?:[-–][A-Za-zА-Яа-яЁё0-9]+)*", text or ""))
+
+
+def _fit_article_to_limits(data: dict) -> dict:
+    """Remove complete low-priority sentences when an otherwise ready article is slightly too long."""
+    text = _as_text(data.get("article_markdown"))
+    if _russian_word_count(text) <= MAX_ARTICLE_WORDS:
+        return data
+
+    paragraphs = text.split("\n\n")
+    protected = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
+    while _russian_word_count("\n\n".join(paragraphs)) > MAX_ARTICLE_WORDS:
+        candidates = []
+        for index, paragraph in enumerate(paragraphs):
+            if protected.match(paragraph):
+                continue
+            sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
+            if len(sentences) < 4:
+                continue
+            last = sentences[-1].strip()
+            if not last:
+                continue
+            candidates.append((_russian_word_count(last), _russian_word_count(paragraph), index, sentences))
+        if not candidates:
+            break
+        _, _, index, sentences = max(candidates)
+        candidate_paragraphs = list(paragraphs)
+        candidate_paragraphs[index] = " ".join(sentences[:-1]).strip()
+        candidate_text = "\n\n".join(candidate_paragraphs)
+        if _russian_word_count(candidate_text) < MIN_ARTICLE_WORDS:
+            break
+        paragraphs = candidate_paragraphs
+
+    fitted = "\n\n".join(paragraphs).strip()
+    if _russian_word_count(fitted) > MAX_ARTICLE_WORDS:
+        raise ValueError(
+            f"Статья превышает {MAX_ARTICLE_WORDS} слов и не может быть безопасно сокращена "
+            "без удаления целых смысловых предложений"
+        )
+    data["article_markdown"] = fitted
+    data["ai_stages"] = data.get("ai_stages", []) + ["Deterministic:final-length-fit"]
+    return data
+
 def generate_article(topic):
     sources = _source_urls(topic)
     if not sources:
@@ -504,6 +551,7 @@ def generate_article(topic):
     data["source_urls"] = sources
     data["source_evidence"] = _source_evidence(topic)
     data = _mechanical_quality_cleanup(data)
+    data = _fit_article_to_limits(data)
 
     final_quality = check_article(data, require_ai_audit=True)
     if not final_quality["ok"]:
