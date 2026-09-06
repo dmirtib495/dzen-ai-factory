@@ -1,0 +1,20 @@
+name: Trigger Force Topic 23 Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/trigger-force-topic-23-once.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch forced approved-topic workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run generate-approved-topic.yml -f proposal_id=23 -f force_run=true
