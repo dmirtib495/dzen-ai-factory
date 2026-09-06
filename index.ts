@@ -44,9 +44,10 @@ async function clearInlineKeyboard(env: Env, chatId: string, messageId?: number)
 
 function mainMenu() {
   return { inline_keyboard: [
-    [{ text: "🧭 Подобрать темы", callback_data: "generate" }, { text: "🔄 Статус", callback_data: "status" }],
-    [{ text: "📋 Очередь", callback_data: "queue" }, { text: "📊 Аналитика", callback_data: "analytics" }],
-    [{ text: "🧠 Стратегия", callback_data: "strategy" }, { text: "📈 Лимиты", callback_data: "quota" }],
+    [{ text: "🧭 Подобрать темы", callback_data: "generate" }, { text: "✍️ Своя тема", callback_data: "custom_topic" }],
+    [{ text: "🔄 Статус", callback_data: "status" }, { text: "📋 Очередь", callback_data: "queue" }],
+    [{ text: "📊 Аналитика", callback_data: "analytics" }, { text: "🧠 Стратегия", callback_data: "strategy" }],
+    [{ text: "📈 Лимиты", callback_data: "quota" }],
   ] };
 }
 
@@ -163,6 +164,72 @@ async function dispatchWorkflow(env: Env, workflow: string, inputs: Record<strin
   return { ok:false,status:r.status,message:body.slice(0,500) };
 }
 
+async function beginCustomTopic(env: Env, chat: string) {
+  const key = `custom_topic_state:${chat}`;
+  await env.DB.prepare(
+    "INSERT INTO settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at"
+  ).bind(key,"awaiting_topic",new Date().toISOString()).run();
+  return send(env,chat,
+    "✍️ Пришлите тему статьи одним сообщением.\n\nМожно добавить ссылку на источник в той же строке или с новой строки. Если ссылки нет, фабрика будет использовать тему как редакционное задание и избегать неподтверждённых конкретных фактов.\n\nДля отмены отправьте /cancel.");
+}
+
+async function customTopicPending(env: Env, chat: string) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key=?")
+    .bind(`custom_topic_state:${chat}`).first<any>();
+  return row?.value === "awaiting_topic";
+}
+
+async function handleCustomTopicText(env: Env, chat: string, rawText: string) {
+  const stateKey = `custom_topic_state:${chat}`;
+  if (rawText === "/cancel") {
+    await env.DB.prepare("DELETE FROM settings WHERE key=?").bind(stateKey).run();
+    return send(env,chat,"Ввод своей темы отменён.",mainMenu());
+  }
+  if (rawText.length < 10 || rawText.length > 1200) {
+    return send(env,chat,"Тема должна содержать от 10 до 1200 символов. Пришлите её ещё раз или отправьте /cancel.");
+  }
+
+  const urlMatch = rawText.match(/https?:\/\/[^\s]+/i);
+  const providedUrl = urlMatch ? urlMatch[0].replace(/[),.;!?]+$/,"") : "";
+  const withoutUrl = providedUrl ? rawText.replace(urlMatch![0]," ").replace(/\s+/g," ").trim() : rawText.trim();
+  const title = (withoutUrl || rawText).split("\n")[0].trim().slice(0,240);
+  const sourceUrl = providedUrl || `https://yandex.ru/search/?text=${encodeURIComponent(title)}`;
+  const now = new Date().toISOString();
+  const groupId = `custom${Date.now().toString(36)}`;
+
+  await env.DB.prepare(
+    "INSERT INTO topic_proposal_groups(id,status,selected_proposal_id,created_at,updated_at) VALUES(?,'pending',NULL,?,?)"
+  ).bind(groupId,now,now).run();
+  const inserted: any = await env.DB.prepare(
+    "INSERT INTO topic_proposals(group_id,position,title,link,source,summary,score,status,created_at,updated_at) VALUES(?,1,?,?,?,?,100,'approved',?,?)"
+  ).bind(
+    groupId,title,sourceUrl,
+    providedUrl ? "Источник, указанный пользователем" : "Тема, предложенная пользователем",
+    rawText,now,now
+  ).run();
+  const proposalId = Number(inserted?.meta?.last_row_id || 0);
+  if (!proposalId) {
+    await env.DB.prepare("DELETE FROM topic_proposal_groups WHERE id=?").bind(groupId).run();
+    return send(env,chat,"❌ Не удалось сохранить тему. Попробуйте ещё раз.",mainMenu());
+  }
+  await env.DB.prepare(
+    "UPDATE topic_proposal_groups SET status='selected',selected_proposal_id=?,updated_at=? WHERE id=?"
+  ).bind(proposalId,now,groupId).run();
+  await env.DB.prepare("DELETE FROM settings WHERE key=?").bind(stateKey).run();
+
+  const dispatched = await dispatchWorkflow(env,"generate-approved-topic.yml",{
+    proposal_id:String(proposalId), force_run:"true",
+  });
+  if (!dispatched.ok) {
+    await env.DB.prepare("UPDATE topic_proposals SET status='approved',updated_at=? WHERE id=?")
+      .bind(new Date().toISOString(),proposalId).run();
+    return send(env,chat,`❌ Тема сохранена под №${proposalId}, но генерация не запустилась. GitHub API: ${dispatched.status}.`,mainMenu());
+  }
+  return send(env,chat,
+    `✅ Ваша тема принята:\n\n${title}\n\nНачинаю полный цикл: статья, независимая редактура, проверка и изображения.`,
+    mainMenu());
+}
+
 async function handleTopicPick(env: Env, chat: string, proposalId: number, messageId?: number) {
   const p = await env.DB.prepare(`SELECT p.id,p.group_id,p.position,p.title,p.status,g.status AS group_status
     FROM topic_proposals p JOIN topic_proposal_groups g ON g.id=p.group_id WHERE p.id=?`).bind(proposalId).first<any>();
@@ -182,7 +249,7 @@ async function handleTopicPick(env: Env, chat: string, proposalId: number, messa
     .bind(proposalId,now,p.group_id).run();
   await clearInlineKeyboard(env,chat,messageId);
 
-  const dispatched = await dispatchWorkflow(env,"generate-approved-topic.yml",{proposal_id:String(proposalId)});
+  const dispatched = await dispatchWorkflow(env,"generate-approved-topic.yml",{proposal_id:String(proposalId),force_run:"true"});
   if (!dispatched.ok) {
     await env.DB.prepare("UPDATE topic_proposal_groups SET status='pending',selected_proposal_id=NULL,updated_at=? WHERE id=?").bind(new Date().toISOString(),p.group_id).run();
     await env.DB.prepare("UPDATE topic_proposals SET status='pending',updated_at=? WHERE group_id=?").bind(new Date().toISOString(),p.group_id).run();
@@ -283,6 +350,7 @@ async function handleCallback(env: Env, chat: string, data: string, callbackId: 
   if (data === "strategy") return send(env,chat,await strategy(env),mainMenu());
   if (data === "quota") return send(env,chat,await quota(env),mainMenu());
   if (data === "status") return send(env,chat,await statusText(env),mainMenu());
+  if (data === "custom_topic") return beginCustomTopic(env,chat);
   if (data === "generate") {
     await send(env,chat,"🧭 Подбираю свежие темы. Статью начну только после твоего выбора.");
     const r=await dispatchWorkflow(env,"dzen-cloud.yml",{trigger_source:"telegram-worker"});
@@ -334,7 +402,12 @@ async function handleUpdate(env: Env, u: TgUpdate) {
   const m=u.message; if (!m) return;
   const chat=String(m?.chat?.id||""); const text=String(m?.text||"").trim();
   const allowed=String(env.TELEGRAM_CHAT_ID||"").trim(); if (allowed && chat!==allowed) return;
-  if (["/start","/help","/menu"].includes(text)) return send(env,chat,"🤖 Dzen AI Factory Cloud\nУправление фабрикой:",mainMenu());
+  if (["/start","/help","/menu"].includes(text)) {
+    await env.DB.prepare("DELETE FROM settings WHERE key=?").bind(`custom_topic_state:${chat}`).run();
+    return send(env,chat,"🤖 Dzen AI Factory Cloud\nУправление фабрикой:",mainMenu());
+  }
+  if (text==="/topic") return beginCustomTopic(env,chat);
+  if (await customTopicPending(env,chat)) return handleCustomTopicText(env,chat,text);
   if (text==="/queue") { const q=await queueView(env); return send(env,chat,q.text,q.keyboard); }
   if (text==="/status") return send(env,chat,await statusText(env),mainMenu());
   if (text==="/analytics") return send(env,chat,await analytics(env),mainMenu());
@@ -356,7 +429,7 @@ export default {
       telegram_chat_configured:Boolean(env.TELEGRAM_CHAT_ID),
       control_secret_configured:Boolean(env.CONTROL_SECRET),
       workflow_trigger_configured:Boolean(env.WORKFLOW_TRIGGER_TOKEN),
-      d1_configured:Boolean(env.DB), image_set_approval:true, topic_approval:true, queue_delete:true,
+      d1_configured:Boolean(env.DB), image_set_approval:true, topic_approval:true, custom_topic:true, queue_delete:true,
     });
     if (url.pathname==="/telegram/webhook" && req.method==="POST") {
       try { const u=await req.json<TgUpdate>(); await handleUpdate(env,u); return json({ok:true}); }
