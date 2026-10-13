@@ -12,7 +12,7 @@ on:
           - DELETE
         default: DELETE
       keep_latest_production:
-        description: 'Always preserve the newest READY production deployment'
+        description: 'Always preserve newest READY production plus three newest READY non-production deployments (backup + two working)'
         required: true
         type: boolean
         default: true
@@ -82,23 +82,27 @@ jobs:
           echo "Total deployments loaded: $total"
           [[ "$total" -gt 0 ]] || { echo 'No deployments returned; refusing to assume the project is empty.' >&2; exit 1; }
 
-          keep_id=$(jq -sr '[.[] | select(.target == "production" and ((.state // .readyState) == "READY"))] | sort_by(.createdAt) | last | (.uid // .id) // empty' "$tmp/all.ndjson")
-          if [[ "$KEEP_LATEST_PRODUCTION" == 'true' && -z "$keep_id" ]]; then
+          keep_ids="$tmp/keep-ids.json"
+          jq -sr --argjson protect "$KEEP_LATEST_PRODUCTION" '
+            ([.[] | select(.target == "production" and ((.state // .readyState) == "READY"))]
+              | sort_by(.createdAt) | last | [(.uid // .id)] // []) as $production
+            | ([.[] | select((.state // .readyState) == "READY" and .target != "production")]
+              | sort_by(.createdAt) | reverse | .[:3] | map(.uid // .id)) as $others
+            | (if $protect then (($production + $others) | unique) else [] end)' "$tmp/all.ndjson" > "$keep_ids"
+
+          if [[ "$KEEP_LATEST_PRODUCTION" == 'true' ]] && [[ "$(jq 'length' "$keep_ids")" -lt 1 ]]; then
             echo 'ERROR: No READY production deployment found; refusing to delete anything.' >&2
             exit 1
           fi
-          if [[ -n "$keep_id" ]]; then
-            echo "Protected newest READY production deployment: $keep_id"
-            jq -sr --arg keep "$keep_id" '[.[] | select((.uid // .id) == $keep)][0] | {id: (.uid // .id), url, state: (.state // .readyState), target, createdAt, commit: .meta.githubCommitMessage}' "$tmp/all.ndjson"
-          fi
-
-          jq -sr --arg keep "$keep_id" --argjson protect "$KEEP_LATEST_PRODUCTION" '
+          echo 'Protected deployments (production + backup + two working READY deployments):'
+          jq -r '.[]' "$keep_ids"
+          jq -sr --slurpfile keep "$keep_ids" '
             [.[] 
               | select((.state // .readyState) != "BUILDING"
                   and (.state // .readyState) != "QUEUED"
                   and (.state // .readyState) != "INITIALIZING"
                   and (.state // .readyState) != "UPLOADING")
-              | select(($protect == false) or ((.uid // .id) != $keep))
+              | select((($keep[0] | index(.uid // .id)) == null))
               | {id: (.uid // .id), url, state: (.state // .readyState), target, createdAt, commit: (.meta.githubCommitMessage // "")}]
             | unique_by(.id) | sort_by(.createdAt) | reverse' "$tmp/all.ndjson" > "$tmp/candidates.json"
 
