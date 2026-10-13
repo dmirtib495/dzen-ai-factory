@@ -72,19 +72,19 @@ jobs:
           total=$(wc -l < "$tmp/all.ndjson" | tr -d ' ')
           echo "Total loaded: $total"
           [[ "$total" -gt 0 ]] || { echo 'No deployments returned; nothing to do.'; exit 0; }
-          keep_id=$(jq -sr '[.[] | select(.target == "production" and (.state == "READY" or .readyState == "READY"))] | sort_by(.created) | last | .id // empty' "$tmp/all.ndjson")
+          keep_id=$(jq -sr '[.[] | select(.target == "production" and (.state == "READY" or .readyState == "READY"))] | sort_by(.created) | last | (.uid // .id) // empty' "$tmp/all.ndjson")
           if [[ "$KEEP_LATEST_PRODUCTION" == 'true' && -z "$keep_id" ]]; then
             echo 'ERROR: no READY production deployment found; refusing to delete anything.' >&2
             exit 1
           fi
           if [[ -n "$keep_id" ]]; then
             echo "Protected newest READY production deployment: $keep_id"
-            jq -sr --arg keep "$keep_id" '[.[] | select(.id == $keep)][0] | {id, url, state, readyState, target, created, commit: .meta.githubCommitMessage}' "$tmp/all.ndjson"
+            jq -sr --arg keep "$keep_id" '[.[] | select((.uid // .id) == $keep)][0] | {id: (.uid // .id), url, state, readyState, target, created, commit: .meta.githubCommitMessage}' "$tmp/all.ndjson"
           fi
           jq -sr --arg keep "$keep_id" --argjson protect "$KEEP_LATEST_PRODUCTION" '
             [.[] | select((.state // .readyState) != "BUILDING" and (.state // .readyState) != "QUEUED" and (.state // .readyState) != "INITIALIZING" and (.state // .readyState) != "UPLOADING")
               | select(($protect == false) or (.id != $keep))
-              | {id, url, state: (.state // .readyState), target, created, commit: (.meta.githubCommitMessage // "")}]
+              | {id: (.uid // .id), url, state: (.state // .readyState), target, created, commit: (.meta.githubCommitMessage // "")}]
             | unique_by(.id) | sort_by(.created) | reverse' "$tmp/all.ndjson" > "$tmp/candidates.json"
           candidates=$(jq 'length' "$tmp/candidates.json")
           echo "Eligible deployments (active builds and protected production excluded): $candidates"
