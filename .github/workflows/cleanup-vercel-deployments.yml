@@ -98,7 +98,7 @@ jobs:
 
           candidates=$(jq 'length' "$tmp/candidates.json")
           echo "Eligible deployments (active builds and protected production excluded): $candidates"
-          jq -r '.[] | "- (.state) | target=(.target // "preview") | (.id) | (.url // "no-url") | (.commit)"' "$tmp/candidates.json"
+          jq -r '.[] | "\(.state) | target=\(.target // "preview") | \(.id) | \(.url // "no-url") | \(.commit)"' "$tmp/candidates.json"
 
           if [[ "$ACTION_MODE" != 'DELETE' ]]; then
             echo 'DRY RUN ONLY: no deployments were deleted. Review the list, then run again with action=DELETE.'
