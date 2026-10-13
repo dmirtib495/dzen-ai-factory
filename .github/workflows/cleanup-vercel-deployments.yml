@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'DRY_RUN previews only; DELETE permanently deletes eligible deployments'
+        description: 'DELETE removes eligible deployments; DRY_RUN only previews them'
         required: true
         type: choice
         options:
           - DRY_RUN
           - DELETE
-        default: DRY_RUN
+        default: DELETE
       keep_latest_production:
         description: 'Always preserve the newest READY production deployment'
         required: true
