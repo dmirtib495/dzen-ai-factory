@@ -1,0 +1,113 @@
+name: Clean up old Vercel deployments
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'DRY_RUN previews only; DELETE permanently deletes eligible deployments'
+        required: true
+        type: choice
+        options:
+          - DRY_RUN
+          - DELETE
+        default: DRY_RUN
+      keep_latest_production:
+        description: 'Always preserve the newest READY production deployment'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-deployment-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: List and optionally delete deployments
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_SiZXW8zFDC1MAcrl64Li59H5kV7y
+          VERCEL_TEAM_ID: team_cRJWY4r8wus0qZRREgNZGL63
+          ACTION_MODE: ${{ inputs.action }}
+          KEEP_LATEST_PRODUCTION: ${{ inputs.keep_latest_production }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VERCEL_TOKEN:-}" ]]; then
+            echo 'ERROR: Add repository secret VERCEL_TOKEN first.' >&2
+            exit 1
+          fi
+          command -v jq >/dev/null
+          api='https://api.vercel.com'
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          : > "$tmp/all.ndjson"
+          cursor=''
+          page=0
+          echo 'Loading deployment pages...'
+          while :; do
+            page=$((page+1))
+            url="$api/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_TEAM_ID&limit=100"
+            if [[ -n "$cursor" ]]; then url="$url&until=$cursor"; fi
+            code=$(curl -sS -o "$tmp/page.json" -w '%{http_code}' -H "Authorization: Bearer $VERCEL_TOKEN" -H 'Accept: application/json' "$url")
+            if [[ "$code" != 200 ]]; then
+              echo "ERROR: List API returned HTTP $code on page $page." >&2
+              jq -r '.error.message // .message // .' "$tmp/page.json" 2>/dev/null || cat "$tmp/page.json"
+              exit 1
+            fi
+            jq -c '.deployments[]?' "$tmp/page.json" >> "$tmp/all.ndjson"
+            next=$(jq -r '.pagination.next // empty' "$tmp/page.json")
+            count=$(jq '[.deployments[]?] | length' "$tmp/page.json")
+            echo "Page $page: $count deployments"
+            [[ "$count" -eq 0 || -z "$next" ]] && break
+            [[ "$next" == "$cursor" ]] && { echo 'ERROR: pagination cursor did not advance.' >&2; exit 1; }
+            cursor="$next"
+            [[ "$page" -lt 500 ]] || { echo 'ERROR: safety stop after 500 pages.' >&2; exit 1; }
+          done
+          total=$(wc -l < "$tmp/all.ndjson" | tr -d ' ')
+          echo "Total loaded: $total"
+          [[ "$total" -gt 0 ]] || { echo 'No deployments returned; nothing to do.'; exit 0; }
+          keep_id=$(jq -sr '[.[] | select(.target == "production" and (.state == "READY" or .readyState == "READY"))] | sort_by(.created) | last | .id // empty' "$tmp/all.ndjson")
+          if [[ "$KEEP_LATEST_PRODUCTION" == 'true' && -z "$keep_id" ]]; then
+            echo 'ERROR: no READY production deployment found; refusing to delete anything.' >&2
+            exit 1
+          fi
+          if [[ -n "$keep_id" ]]; then
+            echo "Protected newest READY production deployment: $keep_id"
+            jq -sr --arg keep "$keep_id" '[.[] | select(.id == $keep)][0] | {id, url, state, readyState, target, created, commit: .meta.githubCommitMessage}' "$tmp/all.ndjson"
+          fi
+          jq -sr --arg keep "$keep_id" --argjson protect "$KEEP_LATEST_PRODUCTION" '
+            [.[] | select((.state // .readyState) != "BUILDING" and (.state // .readyState) != "QUEUED" and (.state // .readyState) != "INITIALIZING" and (.state // .readyState) != "UPLOADING")
+              | select(($protect == false) or (.id != $keep))
+              | {id, url, state: (.state // .readyState), target, created, commit: (.meta.githubCommitMessage // "")}]
+            | unique_by(.id) | sort_by(.created) | reverse' "$tmp/all.ndjson" > "$tmp/candidates.json"
+          candidates=$(jq 'length' "$tmp/candidates.json")
+          echo "Eligible deployments (active builds and protected production excluded): $candidates"
+          jq -r '.[] | "- (.state) | target=(.target // "preview") | (.id) | (.url // "no-url") | (.commit)"' "$tmp/candidates.json"
+          if [[ "$ACTION_MODE" != 'DELETE' ]]; then
+            echo 'DRY RUN ONLY: nothing deleted. Review the list, then manually run again with action=DELETE.'
+            exit 0
+          fi
+          echo 'DELETE mode selected; deleting sequentially...'
+          deleted=0; failed=0
+          while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            if [[ "$KEEP_LATEST_PRODUCTION" == 'true' && "$id" == "$keep_id" ]]; then
+              echo "SKIP protected deployment $id"; continue
+            fi
+            code=$(curl -sS -o "$tmp/delete.json" -w '%{http_code}' -X DELETE -H "Authorization: Bearer $VERCEL_TOKEN" -H 'Accept: application/json' "$api/v13/deployments/$id?teamId=$VERCEL_TEAM_ID")
+            if [[ "$code" =~ ^2 ]]; then
+              echo "DELETED $id (HTTP $code)"; deleted=$((deleted+1))
+            else
+              echo "FAILED $id (HTTP $code): $(jq -r '.error.message // .message // .' "$tmp/delete.json" 2>/dev/null | head -c 500)" >&2
+              failed=$((failed+1))
+            fi
+            sleep 0.15
+          done < <(jq -r '.[].id' "$tmp/candidates.json")
+          echo "Finished. Deleted=$deleted Failed=$failed"
+          [[ "$failed" -eq 0 ]]
